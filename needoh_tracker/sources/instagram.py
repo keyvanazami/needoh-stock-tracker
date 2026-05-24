@@ -33,7 +33,7 @@ def _match_keyword(caption: str) -> str | None:
     return None
 
 
-def parse_profile(account: str, payload: object) -> list[RestockSighting]:
+def parse_profile(account: str, payload: object, store: str | None = None) -> list[RestockSighting]:
     """Extract restock sightings from a profile JSON body.
 
     Handles the common shape:
@@ -69,12 +69,16 @@ def parse_profile(account: str, payload: object) -> list[RestockSighting]:
                 post_url=POST_URL.format(shortcode=shortcode) if shortcode else PROFILE_URL.format(user=account),
                 caption=caption[:500],
                 matched_keyword=kw,
+                platform="instagram",
+                store=store,
             )
         )
     return out
 
 
-async def fetch_account(client: httpx.AsyncClient, account: str) -> list[RestockSighting]:
+async def fetch_account(
+    client: httpx.AsyncClient, account: str, store: str | None = None
+) -> list[RestockSighting]:
     """Fetch one account's recent posts. Never raises."""
     try:
         resp = await client.get(
@@ -85,7 +89,7 @@ async def fetch_account(client: httpx.AsyncClient, account: str) -> list[Restock
             follow_redirects=True,
         )
         resp.raise_for_status()
-        return parse_profile(account, resp.json())
+        return parse_profile(account, resp.json(), store)
     except Exception as err:  # noqa: BLE001
         log.warning("[instagram:%s] fetch failed: %s", account, err)
         return []

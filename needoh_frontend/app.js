@@ -6,7 +6,10 @@
 const $ = (sel) => document.querySelector(sel);
 
 let config = { vapidPublicKey: null, pushEnabled: false };
-let settings = { allStores: [], enabledStores: [], callStores: [], storeLabels: {} };
+let settings = { allStores: [], enabledStores: [], callStores: [], storeLabels: {}, socialPlatforms: [] };
+let socialAccounts = []; // working copy edited in the UI before save
+
+const PLATFORM_LABELS = { instagram: "Instagram", facebook: "Facebook" };
 
 // ---------- rendering ----------
 
@@ -51,13 +54,16 @@ function renderSightings(sightings) {
     return;
   }
   el.innerHTML = sightings
-    .map(
-      (s) => `<li>
+    .map((s) => {
+      const platform = PLATFORM_LABELS[s.platform] || s.platform || "Instagram";
+      const storeTag = s.store ? ` → ${escapeHtml(settings.storeLabels[s.store] || s.store)}` : "";
+      return `<li>
         <div>${escapeHtml(s.caption || "(no caption)")}</div>
-        <div class="feed-meta">@${escapeHtml(s.account)} · matched "${escapeHtml(s.matched_keyword)}" ·
+        <div class="feed-meta">${escapeHtml(platform)} · @${escapeHtml(s.account)}${storeTag} ·
+          matched "${escapeHtml(s.matched_keyword)}" ·
           <a href="${s.post_url}" target="_blank" rel="noopener">view post</a></div>
-      </li>`
-    )
+      </li>`;
+    })
     .join("");
 }
 
@@ -103,7 +109,8 @@ async function loadAll() {
 async function loadSettings() {
   settings = await fetch("/api/settings").then((r) => r.json());
   $("#poll-interval").value = settings.pollIntervalS;
-  $("#instagram-accounts").value = (settings.instagramAccounts || []).join(", ");
+  socialAccounts = (settings.socialAccounts || []).map((a) => ({ ...a }));
+  renderSocialAccounts();
 
   const storeToggles = settings.allStores
     .map(
@@ -127,6 +134,33 @@ async function loadSettings() {
         settings.storeLabels[s] || s
       )}</button>`
     )
+    .join("");
+
+  // Populate the "linked store" dropdown for adding social pages.
+  $("#social-store").innerHTML =
+    '<option value="">No store link</option>' +
+    settings.allStores
+      .map((s) => `<option value="${s}">${escapeHtml(settings.storeLabels[s] || s)}</option>`)
+      .join("");
+}
+
+function renderSocialAccounts() {
+  const el = $("#social-list");
+  if (!socialAccounts.length) {
+    el.innerHTML = '<p class="muted empty">No pages yet — add one below.</p>';
+    return;
+  }
+  el.innerHTML = socialAccounts
+    .map((a, i) => {
+      const platform = PLATFORM_LABELS[a.platform] || a.platform;
+      const storeTag = a.store
+        ? ` → ${escapeHtml(settings.storeLabels[a.store] || a.store)}`
+        : "";
+      return `<div class="social-row">
+        <span><strong>${escapeHtml(platform)}</strong> @${escapeHtml(a.account)}${storeTag}</span>
+        <button type="button" class="btn btn--ghost btn--small" data-social-remove="${i}">Remove</button>
+      </div>`;
+    })
     .join("");
 }
 
@@ -157,11 +191,31 @@ $("#call-buttons").addEventListener("click", async (e) => {
   btn.disabled = false;
 });
 
+$("#social-add-btn").addEventListener("click", () => {
+  const platform = $("#social-platform").value;
+  const account = $("#social-handle").value.trim().replace(/^@/, "").replace(/\/+$/, "");
+  const store = $("#social-store").value || null;
+  if (!account) return;
+  const exists = socialAccounts.some(
+    (a) => a.platform === platform && a.account.toLowerCase() === account.toLowerCase()
+  );
+  if (!exists) socialAccounts.push({ platform, account, store });
+  $("#social-handle").value = "";
+  $("#social-store").value = "";
+  renderSocialAccounts();
+});
+
+$("#social-list").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-social-remove]");
+  if (!btn) return;
+  socialAccounts.splice(Number(btn.dataset.socialRemove), 1);
+  renderSocialAccounts();
+});
+
 $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const enabledStores = [...document.querySelectorAll('input[name="store"]:checked')].map((i) => i.value);
   const callStores = [...document.querySelectorAll('input[name="callstore"]:checked')].map((i) => i.value);
-  const instagramAccounts = $("#instagram-accounts").value.split(",").map((s) => s.trim()).filter(Boolean);
   await fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -169,7 +223,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
       pollIntervalS: Number($("#poll-interval").value),
       enabledStores,
       callStores,
-      instagramAccounts,
+      socialAccounts,
     }),
   });
   await loadSettings();

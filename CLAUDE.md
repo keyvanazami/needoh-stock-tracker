@@ -31,8 +31,8 @@ needoh_tracker/
   notifier.py    SSE + Web Push (VAPID) + email (SMTP) fan-out
   phone.py       Twilio outbound calls + TwiML (real or "simulated")
   config.py      env-driven Settings; all integrations optional
-  models.py      Product / RestockSighting / CallRecord dataclasses
-  sources/       one adapter per retailer + the Instagram watcher
+  models.py      Product / RestockSighting / SocialAccount / CallRecord dataclasses
+  sources/       one adapter per retailer + Instagram & Facebook social watchers
 needoh_frontend/ static dashboard (watchlist, IG feed, call log, settings)
 tests/           unit tests + fixtures (test_store.py, test_sources.py)
 ```
@@ -85,5 +85,12 @@ tests/           unit tests + fixtures (test_store.py, test_sources.py)
 - **New retailer:** add `sources/<name>.py` with a `RetailerSource` subclass + a
   pure parser function, register it in `sources/__init__.py`, add it to
   `config.ALL_STORES`, and add a fixture-backed parser test.
+- **New social platform:** add `sources/<name>.py` with a pure
+  `parse_*(account, body, store=None) -> list[RestockSighting]` + a
+  `fetch_*(client, account, store=None)` that never raises (mirror
+  `instagram.py`/`facebook.py`), add the id to `config.SOCIAL_PLATFORMS`, seed it
+  from an env var in `load_settings`, and dispatch to it in `scheduler.run_cycle`.
+  Social pages carry an optional `store` link (subset of `config.ALL_STORES`); a
+  fresh hint for a `store` in `call_stores` triggers that store's auto-call.
 - **New notification channel:** add a method in `notifier.py` and call it from
   `notify_restock`/`notify_sightings`; gate it behind a `config.Settings` flag.

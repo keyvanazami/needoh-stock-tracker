@@ -10,6 +10,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .models import SocialAccount
+
+SOCIAL_PLATFORMS: tuple[str, ...] = ("instagram", "facebook")
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "needoh_frontend"
 
@@ -61,7 +65,8 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "needoh-data")
 
     enabled_stores: list[str] = field(default_factory=lambda: list(ALL_STORES))
-    instagram_accounts: list[str] = field(default_factory=list)
+    # Social pages (Instagram/Facebook) watched for restock hints.
+    social_accounts: list[SocialAccount] = field(default_factory=list)
     # Stores we should phone to ask about restocks (subset of enabled_stores).
     call_stores: list[str] = field(default_factory=list)
 
@@ -118,11 +123,17 @@ def load_settings() -> Settings:
     call_stores = [s.lower() for s in _split_csv(os.environ.get("CALL_STORES"))]
     call_stores = [s for s in call_stores if s in ALL_STORES]
 
+    social_accounts: list[SocialAccount] = []
+    for handle in _split_csv(os.environ.get("INSTAGRAM_ACCOUNTS")):
+        social_accounts.append(SocialAccount("instagram", handle.lstrip("@")))
+    for handle in _split_csv(os.environ.get("FACEBOOK_ACCOUNTS")):
+        social_accounts.append(SocialAccount("facebook", handle.strip("/")))
+
     return Settings(
         port=int(os.environ.get("PORT", "3100")),
         poll_interval_s=max(60, int(os.environ.get("POLL_INTERVAL_S", "600"))),
         enabled_stores=enabled,
-        instagram_accounts=_split_csv(os.environ.get("INSTAGRAM_ACCOUNTS")),
+        social_accounts=social_accounts,
         call_stores=call_stores,
         smtp_host=os.environ.get("SMTP_HOST") or None,
         smtp_port=int(os.environ.get("SMTP_PORT", "587")),

@@ -131,6 +131,15 @@ legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
 .toggles { display: flex; flex-wrap: wrap; gap: 14px; }
 .toggles label { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
 
+.social-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.social-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  font-size: 14px; color: var(--text); }
+.social-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.social-add input { flex: 1 1 160px; }
+.social-add select { flex: 0 1 auto; }
+.social-hint { font-size: 12px; margin: 8px 0 0; }
+
 .call-status { font-size: 11px; padding: 1px 7px; border-radius: 999px; margin-left: 6px; }
 .call-status--queued { background: rgba(241, 196, 15, .15); color: #f1c40f; }
 .call-status--completed { background: rgba(46, 204, 113, .15); color: var(--green); }

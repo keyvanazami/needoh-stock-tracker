@@ -17,6 +17,7 @@ from .models import RestockSighting
 from .notifier import Notifier
 from .phone import PhoneCaller
 from .sources import get_sources, source_label
+from .sources.facebook import fetch_page
 from .sources.instagram import fetch_account
 from .store import TrackerStore
 
@@ -36,12 +37,17 @@ async def run_cycle(
     sources = get_sources(settings.enabled_stores)
     async with httpx.AsyncClient() as client:
         store_tasks = [src.check(client) for src in sources]
-        ig_tasks = [fetch_account(client, acct) for acct in settings.instagram_accounts]
+        social_tasks = []
+        for acct in settings.social_accounts:
+            if acct.platform == "facebook":
+                social_tasks.append(fetch_page(client, acct.account, acct.store))
+            else:
+                social_tasks.append(fetch_account(client, acct.account, acct.store))
         store_results = await asyncio.gather(*store_tasks) if store_tasks else []
-        ig_results = await asyncio.gather(*ig_tasks) if ig_tasks else []
+        social_results = await asyncio.gather(*social_tasks) if social_tasks else []
 
     products = [p for batch in store_results for p in batch]
-    sightings: list[RestockSighting] = [s for batch in ig_results for s in batch]
+    sightings: list[RestockSighting] = [s for batch in social_results for s in batch]
 
     restocked = store.apply_products(products)
     fresh_sightings = store.add_sightings(sightings)
@@ -57,17 +63,18 @@ async def run_cycle(
 
     if restocked:
         await notifier.notify_restock(restocked)
-        # Call stores flagged for confirmation that just restocked.
-        called_stores: set[str] = set()
-        for product in restocked:
-            if product.store in settings.call_stores and product.store not in called_stores:
-                called_stores.add(product.store)
-                await asyncio.to_thread(
-                    caller.call_store, product.store, source_label(product.store)
-                )
 
     if fresh_sightings:
         await notifier.notify_sightings(fresh_sightings)
+
+    # Call stores flagged for confirmation that just restocked or were named in a
+    # fresh social restock hint. One call per store per cycle.
+    called_stores: set[str] = set()
+    triggers = [p.store for p in restocked] + [s.store for s in fresh_sightings if s.store]
+    for store_id in triggers:
+        if store_id in settings.call_stores and store_id not in called_stores:
+            called_stores.add(store_id)
+            await asyncio.to_thread(caller.call_store, store_id, source_label(store_id))
 
     summary = {
         "checked": len(products),

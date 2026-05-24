@@ -43,19 +43,39 @@ class Product:
 
 
 @dataclass
+class SocialAccount:
+    """A social page watched for restock announcements.
+
+    ``store`` optionally links the page to an entry in ``config.ALL_STORES`` so
+    a restock hint from that page can drive the store's auto-call.
+    """
+
+    platform: str  # "instagram" | "facebook"
+    account: str  # handle / page slug
+    store: str | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class RestockSighting:
-    """An Instagram post whose caption hints a restock."""
+    """A social post whose caption hints a restock."""
 
     account: str
     post_url: str
     caption: str
     matched_keyword: str
+    platform: str = "instagram"
+    store: str | None = None
     seen_at: str = field(default_factory=_now_iso)
 
     @property
     def key(self) -> str:
-        digest = hashlib.sha1(self.post_url.encode()).hexdigest()[:12]
-        return f"ig:{self.account}:{digest}"
+        # Hash url + caption so platforms that share one page URL across posts
+        # (e.g. Facebook page scrapes) still dedupe per distinct caption.
+        digest = hashlib.sha1(f"{self.post_url}\n{self.caption}".encode()).hexdigest()[:12]
+        return f"{self.platform}:{self.account}:{digest}"
 
     def to_dict(self) -> dict:
         data = asdict(self)

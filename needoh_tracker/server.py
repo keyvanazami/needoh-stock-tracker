@@ -29,7 +29,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import ALL_STORES, FRONTEND_DIR, load_settings
+from .config import ALL_STORES, FRONTEND_DIR, SOCIAL_PLATFORMS, load_settings
+from .models import SocialAccount
 from .notifier import Notifier
 from .phone import PhoneCaller, build_gather_response_twiml, build_voice_twiml
 from .scheduler import poll_loop, run_cycle
@@ -162,7 +163,8 @@ async def api_get_settings() -> dict:
         "enabledStores": settings.enabled_stores,
         "allStores": list(ALL_STORES),
         "callStores": settings.call_stores,
-        "instagramAccounts": settings.instagram_accounts,
+        "socialAccounts": [a.to_dict() for a in settings.social_accounts],
+        "socialPlatforms": list(SOCIAL_PLATFORMS),
         "storeLabels": {s: source_label(s) for s in ALL_STORES},
     }
 
@@ -180,9 +182,31 @@ async def api_set_settings(request: Request) -> dict:
             settings.enabled_stores = [s for s in body["enabledStores"] if s in ALL_STORES] or list(ALL_STORES)
         if isinstance(body.get("callStores"), list):
             settings.call_stores = [s for s in body["callStores"] if s in ALL_STORES]
-        if isinstance(body.get("instagramAccounts"), list):
-            settings.instagram_accounts = [str(a).strip().lstrip("@") for a in body["instagramAccounts"] if str(a).strip()]
+        if isinstance(body.get("socialAccounts"), list):
+            settings.social_accounts = _parse_social_accounts(body["socialAccounts"])
     return await api_get_settings()
+
+
+def _parse_social_accounts(raw: list) -> list[SocialAccount]:
+    accounts: list[SocialAccount] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        platform = str(item.get("platform") or "").strip().lower()
+        if platform not in SOCIAL_PLATFORMS:
+            continue
+        handle = str(item.get("account") or "").strip().lstrip("@").strip("/")
+        if not handle:
+            continue
+        store = item.get("store")
+        store = store if store in ALL_STORES else None
+        dedupe = (platform, handle.lower())
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        accounts.append(SocialAccount(platform=platform, account=handle, store=store))
+    return accounts
 
 
 # ---------- web push subscriptions ----------

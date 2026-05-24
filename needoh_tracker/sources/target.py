@@ -20,6 +20,40 @@ import os
 WEB_KEY = os.environ.get("TARGET_API_KEY", "9f36aeafbe60771e321a7cc95a78140772ab3e96")
 
 
+def _is_in_stock(fulfillment: dict) -> bool:
+    """Conservative availability read of a RedSky fulfillment block.
+
+    A product is in stock only on an *explicit positive* signal — shipping,
+    scheduled delivery, or any store pickup option reporting ``IN_STOCK``.
+    Ambiguous or missing fulfillment is treated as out of stock, since the PLP
+    payload omits status for items that aren't sellable. This is what keeps the
+    watchlist from showing sold-out items as available.
+    """
+    if not isinstance(fulfillment, dict):
+        return False
+
+    def _status(node: object) -> str:
+        if isinstance(node, dict):
+            return str(node.get("availability_status") or "").upper()
+        return ""
+
+    if _status(fulfillment.get("shipping_options")) == "IN_STOCK":
+        return True
+    if _status(fulfillment.get("scheduled_delivery")) == "IN_STOCK":
+        return True
+    store_options = fulfillment.get("store_options")
+    if isinstance(store_options, list):
+        for option in store_options:
+            if not isinstance(option, dict):
+                continue
+            for sub in ("order_pickup", "ship_to_store", "in_store_only"):
+                if _status(option.get(sub)) == "IN_STOCK":
+                    return True
+            if _status(option) == "IN_STOCK":
+                return True
+    return False
+
+
 def parse_search(payload: object) -> list[Product]:
     if not isinstance(payload, dict):
         return []
@@ -53,17 +87,7 @@ def parse_search(payload: object) -> list[Product]:
         images = (item.get("item") or {}).get("enrichment", {}).get("images") or {}
         image = images.get("primary_image_url")
 
-        # Availability: RedSky exposes an out_of_stock_all_locations style flag
-        # plus a purchasability status. Treat anything not explicitly OOS as
-        # available, since PLP doesn't always carry inventory counts.
-        fulfillment = item.get("fulfillment") or {}
-        is_oos = fulfillment.get("is_out_of_stock_in_all_store_locations")
-        shipping = (fulfillment.get("shipping_options") or {}).get("availability_status")
-        in_stock = True
-        if shipping:
-            in_stock = str(shipping).upper() == "IN_STOCK"
-        elif is_oos is True:
-            in_stock = False
+        in_stock = _is_in_stock(item.get("fulfillment") or {})
 
         out.append(
             Product(

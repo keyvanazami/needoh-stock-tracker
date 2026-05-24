@@ -6,6 +6,7 @@ import json
 import unittest
 from pathlib import Path
 
+from needoh_tracker.sources.facebook import parse_page as parse_facebook
 from needoh_tracker.sources.instagram import parse_profile
 from needoh_tracker.sources.schylling import parse_products as parse_schylling
 from needoh_tracker.sources.target import parse_search as parse_target
@@ -42,6 +43,20 @@ class TargetParserTest(unittest.TestCase):
         self.assertFalse(by_sku["67890"].in_stock)
         self.assertEqual(by_sku["12345"].price, 9.99)
 
+    def test_ambiguous_fulfillment_is_out_of_stock(self) -> None:
+        # No explicit positive signal → conservative: treat as out of stock.
+        products = parse_target(json.loads(_load("target_search.json")))
+        by_sku = {p.sku: p for p in products}
+        self.assertIn("55555", by_sku)
+        self.assertFalse(by_sku["55555"].in_stock)
+
+    def test_store_pickup_counts_as_in_stock(self) -> None:
+        # Shipping OOS but pickup IN_STOCK → available.
+        products = parse_target(json.loads(_load("target_search.json")))
+        by_sku = {p.sku: p for p in products}
+        self.assertIn("44444", by_sku)
+        self.assertTrue(by_sku["44444"].in_stock)
+
 
 class WalmartParserTest(unittest.TestCase):
     def test_parses_next_data(self) -> None:
@@ -55,6 +70,24 @@ class InstagramParserTest(unittest.TestCase):
         self.assertEqual(len(sightings), 1)
         self.assertEqual(sightings[0].matched_keyword, "back in stock")
         self.assertIn("/p/RESTOCK123/", sightings[0].post_url)
+
+
+class FacebookParserTest(unittest.TestCase):
+    def test_matches_restock_keywords(self) -> None:
+        sightings = parse_facebook("schylling", _load("facebook_page.html"), store="schylling")
+        captions = [s.caption for s in sightings]
+        # og:description ("back in stock") + the "restock just dropped" post.
+        self.assertTrue(any("back in stock" in c.lower() for c in captions))
+        self.assertTrue(any("restock just dropped" in c.lower() for c in captions))
+        # Non-matching lines (store hours, welcome) are excluded.
+        self.assertFalse(any("store hours" in c.lower() for c in captions))
+        self.assertTrue(all(s.platform == "facebook" for s in sightings))
+        self.assertTrue(all(s.store == "schylling" for s in sightings))
+
+    def test_distinct_sightings_dedupe_by_caption(self) -> None:
+        sightings = parse_facebook("schylling", _load("facebook_page.html"))
+        keys = {s.key for s in sightings}
+        self.assertEqual(len(keys), len(sightings))
 
 
 if __name__ == "__main__":

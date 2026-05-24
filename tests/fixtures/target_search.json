@@ -39,6 +39,33 @@
           },
           "price": { "current_retail": 24.99 },
           "fulfillment": {}
+        },
+        {
+          "tcin": "55555",
+          "item": {
+            "product_description": { "title": "NeeDoh Nice Cube (ambiguous)" },
+            "enrichment": {
+              "buy_url": "https://www.target.com/p/needoh/-/A-55555"
+            }
+          },
+          "price": { "current_retail": 9.99 },
+          "fulfillment": {}
+        },
+        {
+          "tcin": "44444",
+          "item": {
+            "product_description": { "title": "NeeDoh Pickup Only" },
+            "enrichment": {
+              "buy_url": "https://www.target.com/p/needoh/-/A-44444"
+            }
+          },
+          "price": { "current_retail": 6.99 },
+          "fulfillment": {
+            "shipping_options": { "availability_status": "OUT_OF_STOCK" },
+            "store_options": [
+              { "order_pickup": { "availability_status": "IN_STOCK" } }
+            ]
+          }
         }
       ]
     }
