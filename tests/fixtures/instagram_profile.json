@@ -1,0 +1,30 @@
+{
+  "data": {
+    "user": {
+      "edge_owner_to_timeline_media": {
+        "edges": [
+          {
+            "node": {
+              "shortcode": "RESTOCK123",
+              "edge_media_to_caption": {
+                "edges": [
+                  { "node": { "text": "Great news! The Groovy Glob is back in stock now at all retailers!" } }
+                ]
+              }
+            }
+          },
+          {
+            "node": {
+              "shortcode": "JUSTAPIC",
+              "edge_media_to_caption": {
+                "edges": [
+                  { "node": { "text": "Happy Friday from the squish squad!" } }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

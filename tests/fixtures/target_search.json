@@ -1,0 +1,46 @@
+{
+  "data": {
+    "search": {
+      "products": [
+        {
+          "tcin": "12345",
+          "item": {
+            "product_description": { "title": "NeeDoh Groovy Glob Sensory Toy" },
+            "enrichment": {
+              "buy_url": "https://www.target.com/p/needoh/-/A-12345",
+              "images": { "primary_image_url": "https://target.com/img/12345.jpg" }
+            }
+          },
+          "price": { "current_retail": 9.99 },
+          "fulfillment": {
+            "shipping_options": { "availability_status": "IN_STOCK" },
+            "is_out_of_stock_in_all_store_locations": false
+          }
+        },
+        {
+          "tcin": "67890",
+          "item": {
+            "product_description": { "title": "Nee Doh Teenie Squishy" },
+            "enrichment": {
+              "buy_url": "https://www.target.com/p/needoh/-/A-67890",
+              "images": { "primary_image_url": "https://target.com/img/67890.jpg" }
+            }
+          },
+          "price": { "current_retail": 4.99 },
+          "fulfillment": {
+            "shipping_options": { "availability_status": "OUT_OF_STOCK" },
+            "is_out_of_stock_in_all_store_locations": true
+          }
+        },
+        {
+          "tcin": "99999",
+          "item": {
+            "product_description": { "title": "Random Board Game" }
+          },
+          "price": { "current_retail": 24.99 },
+          "fulfillment": {}
+        }
+      ]
+    }
+  }
+}

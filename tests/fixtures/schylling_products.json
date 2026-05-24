@@ -1,0 +1,31 @@
+{
+  "products": [
+    {
+      "id": 111,
+      "title": "NeeDoh Nice Cube",
+      "handle": "needoh-nice-cube",
+      "product_type": "Fidget",
+      "tags": ["needoh", "sensory"],
+      "images": [{ "src": "https://schylling.com/img/nice-cube.jpg" }],
+      "variants": [{ "price": "9.99", "available": true }]
+    },
+    {
+      "id": 222,
+      "title": "NeeDoh Dohnut",
+      "handle": "needoh-dohnut",
+      "product_type": "Fidget",
+      "tags": ["nee-doh"],
+      "images": [{ "src": "https://schylling.com/img/dohnut.jpg" }],
+      "variants": [{ "price": "7.50", "available": false }]
+    },
+    {
+      "id": 333,
+      "title": "Unrelated Plush Bear",
+      "handle": "plush-bear",
+      "product_type": "Plush",
+      "tags": ["teddy"],
+      "images": [{ "src": "https://schylling.com/img/bear.jpg" }],
+      "variants": [{ "price": "19.99", "available": true }]
+    }
+  ]
+}

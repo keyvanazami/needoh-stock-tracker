@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NeeDoh Stock Tracker</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>NeeDoh Stock Tracker</h1>
+      <div class="header-actions">
+        <span id="status" class="status status--off" title="live connection">live</span>
+        <button id="notify-btn" class="btn btn--ghost">Enable notifications</button>
+        <button id="check-btn" class="btn">Check now</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Watchlist</h2>
+          <span id="cycle-summary" class="muted"></span>
+        </div>
+        <table id="products">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Product</th>
+              <th>Store</th>
+              <th>Price</th>
+              <th>Stock</th>
+              <th>Last checked</th>
+            </tr>
+          </thead>
+          <tbody id="products-body">
+            <tr><td colspan="6" class="muted empty">No data yet. Click "Check now".</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <div class="grid">
+        <section class="panel">
+          <div class="panel-head"><h2>Instagram restock hints</h2></div>
+          <ul id="sightings" class="feed">
+            <li class="muted empty">No sightings yet.</li>
+          </ul>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Store calls</h2></div>
+          <div id="call-buttons" class="call-buttons"></div>
+          <ul id="calls" class="feed">
+            <li class="muted empty">No calls yet.</li>
+          </ul>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Settings</h2></div>
+        <form id="settings-form" class="settings">
+          <label>
+            Poll interval (seconds)
+            <input type="number" id="poll-interval" min="60" step="30" />
+          </label>
+          <fieldset>
+            <legend>Stores to track</legend>
+            <div id="store-toggles" class="toggles"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Stores to phone on restock</legend>
+            <div id="call-toggles" class="toggles"></div>
+          </fieldset>
+          <label>
+            Instagram accounts (comma-separated)
+            <input type="text" id="instagram-accounts" placeholder="schylling, needohofficial" />
+          </label>
+          <button type="submit" class="btn">Save settings</button>
+          <span id="settings-saved" class="muted"></span>
+        </form>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

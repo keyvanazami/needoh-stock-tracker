@@ -1,0 +1,16 @@
+# Durable tracker state (watchlist, sightings, push subs, call log).
+needoh-data/
+
+# Env / secrets
+.env*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+*.log

@@ -1,0 +1,11 @@
+# NeeDoh Stock Tracker deps. Install into a venv with:
+#   python -m venv .venv
+#   .venv/bin/pip install -r needoh_tracker/requirements.txt
+fastapi>=0.115
+uvicorn[standard]>=0.32
+httpx>=0.27
+python-dotenv>=1.0
+beautifulsoup4>=4.12
+# Optional integrations (app degrades gracefully if these are unused):
+pywebpush>=2.0      # browser web-push notifications (VAPID)
+twilio>=9.0         # real outbound store phone calls
