@@ -1,0 +1,39 @@
+# B-Stack acceptance vectors -- your implementation MUST reproduce these exactly.
+# Any mismatch means a bug that will silently corrupt every later measurement.
+
+## CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflect, no xorout)
+  crc16("123456789")   = 0x29B1
+  crc16("")            = 0xFFFF
+  crc16("A")           = 0xB915
+  crc16("AAPL")        = 0x3182
+  ^ the "123456789" value 0x29B1 is the canonical check constant
+
+## Frame encoding
+  quote  broadcast   (17 bytes)  AA AA D5 08 21 FF 10 00 01 01 2C 00 64 01 2D 2C 93
+  order  to venue    (15 bytes)  AA AA D5 06 21 01 20 00 01 01 2C 00 32 CE 2F
+  ack    empty       ( 9 bytes)  AA AA D5 00 01 21 30 B0 74
+
+## Manchester coding (802.3: bit0->10, bit1->01)
+  0x00 -> AA AA   (popcount 4+4, DC balanced)
+  0xFF -> 55 55   (popcount 4+4, DC balanced)
+  0xA5 -> 66 99   (popcount 4+4, DC balanced)
+  0x5A -> 99 66   (popcount 4+4, DC balanced)
+  0x21 -> A6 A9   (popcount 4+4, DC balanced)
+
+  Only 16 byte values can ever appear in coded data.
+  0x00 and 0xFF are UNREACHABLE -> use one as the radio sync delimiter.
+  (A deliberate code violation, exactly as Ethernet and Token Ring do.)
+
+## Radio byte budget at 2000 bps with Manchester
+  updates/sec         line bits bytes/update
+  1                        2000        125.0
+  5                         400         25.0
+  10                        200         12.5
+  20                        100          6.2
+
+## Delay repeater settings (2400 baud, 19200 Hz sampling)
+  scenario                     delay us    samples  buf bytes
+  Chicago-NJ (K=16.1)             71500       1373        172
+  London-Frankfurt                21500        413         52
+  CSMA a=0.06 sweep point          1000         19          2
+  CSMA a=0.30 sweep point          5000         96         12
