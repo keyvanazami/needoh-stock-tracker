@@ -10,7 +10,7 @@ CXX      ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
 INC       = -I$(ROOT)/lib
 LIB       = $(ROOT)/arduino/libraries/BStack
-SKETCHES  = venue trader repeater busnode dualrx radio_tx radio_rx
+SKETCHES  = venue trader repeater busnode dualrx radio_tx radio_rx risetime
 OUT      := $(shell printf '%s' "$${TMPDIR:-/tmp}" | sed 's:/*$$::')
 
 all: check test sketches
@@ -65,7 +65,8 @@ sketches: check
 
 sync-examples:
 	@for p in Venue:venue Trader:trader Repeater:repeater BusNode:busnode \
-	          DualRx:dualrx RadioTx:radio_tx RadioRx:radio_rx; do \
+	          DualRx:dualrx RadioTx:radio_tx RadioRx:radio_rx \
+          RiseTime:risetime; do \
 	  ex=$${p%%:*}; src=$${p##*:}; mkdir -p $(LIB)/examples/$$ex; \
 	  cp $(ROOT)/arduino/$$src/$$src.ino $(LIB)/examples/$$ex/$$ex.ino; \
 	done; echo "examples synced"
