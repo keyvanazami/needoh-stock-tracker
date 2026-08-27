@@ -59,6 +59,7 @@ void loop() {
     Serial.print(F(" quotes ")); Serial.print(quotes);
     Serial.print(F(" myTrades ")); Serial.print(my_trades);
     Serial.print(F(" collisions ")); Serial.print(bus.collisions);
-    Serial.print(F(" crcErr ")); Serial.println(bus.rx.crc_errors);
+    Serial.print(F(" crcErr ")); Serial.print(bus.rx.crc_errors);
+    Serial.print(F(" stuck ")); Serial.println(bus.stuck);   // >0 = bus jammed dominant
   }
 }

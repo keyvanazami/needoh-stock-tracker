@@ -38,10 +38,20 @@
 // as a free bus and start transmitting on top of us.
 #define BS_ARB_GAP_BITS 3
 
+// Bit-times waitIdle() will wait for a quiet bus before declaring it jammed.
+// The longest legal transmission is 73 bytes x 10 bit-times + 8 arbitration
+// bits + the gap = about 741 bit-times, so this is ~2.7x the worst legitimate
+// case: nothing well-behaved can hold the line this long. A bus wedged
+// dominant -- a missing pull-up, a shorted driver, a floating D4 -- used to
+// spin here forever, taking the sketch's serial output down with it. Real CAN
+// has exactly this problem and answers it with error counters and a bus-off
+// state; this is the same idea at student scale.
+#define BS_STUCK_BITS 2000UL
+
 class BStack {
  public:
   uint8_t  id = 0x21;
-  uint16_t collisions = 0, sent = 0, giveups = 0;
+  uint16_t collisions = 0, sent = 0, giveups = 0, stuck = 0;
   FrameRx  rx;
 
   void begin(uint8_t station_id) {
@@ -54,12 +64,18 @@ class BStack {
   static inline void dominant()  { pinMode(BS_PIN, OUTPUT); digitalWrite(BS_PIN, LOW); }
   static inline uint8_t sense()  { return (uint8_t)digitalRead(BS_PIN); }
 
-  void waitIdle() {
+  // Returns 1 when the bus has been quiet for 4 bit-times, 0 if it stayed
+  // busy past BS_STUCK_BITS. Never blocks forever: a jammed bus must be
+  // reportable, not fatal.
+  uint8_t waitIdle() {
     uint8_t quiet = 0;
+    uint32_t spent = 0;
     while (quiet < 4) {
+      if (++spent > BS_STUCK_BITS) { stuck++; return 0; }
       quiet = sense() ? (uint8_t)(quiet + 1) : 0;
       delayMicroseconds(BS_BIT_US);
     }
+    return 1;
   }
 
   inline uint8_t bitChecked(uint8_t b) {
@@ -84,7 +100,7 @@ class BStack {
     size_t n = bf_encode(f, wire, sizeof wire);
     if (!n) return 0;
     for (uint8_t attempt = 0; attempt < BS_MAXTRIES; attempt++) {
-      waitIdle();
+      if (!waitIdle()) { giveups++; return 0; }   // bus jammed dominant
       uint8_t won = 1;
       for (int8_t b = 7; b >= 0; b--)
         if (!bitChecked((uint8_t)((id >> b) & 1))) { won = 0; break; }

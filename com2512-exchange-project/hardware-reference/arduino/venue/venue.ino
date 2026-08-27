@@ -83,6 +83,7 @@ void loop() {
     Serial.print(F(" trades ")); Serial.print(trades);
     Serial.print(F(" bid ")); Serial.print(book.best_bid());
     Serial.print(F(" ask ")); Serial.print(book.best_ask());
-    Serial.print(F(" collisions ")); Serial.println(bus.collisions);
+    Serial.print(F(" collisions ")); Serial.print(bus.collisions);
+    Serial.print(F(" stuck ")); Serial.println(bus.stuck);   // >0 = bus jammed dominant
   }
 }
