@@ -85,6 +85,14 @@ class BStack {
     delayMicroseconds(BS_BIT_US / 2);
     return !(b == 1 && line == 0);
   }
+  // delayMicroseconds() takes a 16-bit unsigned int on AVR and is only accurate
+  // below 16383 us. A 1023-slot backoff is 425568 us, which both overflows the
+  // argument and exceeds the accurate range, so backoff has to be counted in
+  // bit-times rather than handed over as one large microsecond value.
+  static inline void delayBits(uint32_t bits) {
+    while (bits--) delayMicroseconds(BS_BIT_US);
+  }
+
   inline void bitRaw(uint8_t b) {
     if (b) recessive(); else dominant();
     delayMicroseconds(BS_BIT_US);
@@ -108,7 +116,7 @@ class BStack {
         recessive();
         collisions++;
         uint16_t slots = (uint16_t)random(1UL << (attempt < 10 ? attempt + 1 : 10));
-        delayMicroseconds(slots * BS_BIT_US);
+        delayBits(slots);
         continue;
       }
       for (uint8_t g = 0; g < BS_ARB_GAP_BITS; g++) bitRaw(1);
@@ -119,6 +127,30 @@ class BStack {
     }
     giveups++;
     return 0;
+  }
+
+  // Physical-layer self-test. Drives each level and checks the line follows.
+  //   bit 0 set: released the line and it did NOT go high -- no pull-up, the
+  //              pull-up's rail is unpowered, D4 is floating, no common ground,
+  //              or another node is holding the bus dominant.
+  //   bit 1 set: drove the line low and it did NOT go low -- D4 is not
+  //              connected to the bus wire at all.
+  // Run it at boot, before any traffic. Retries so a station that happens to be
+  // transmitting during the first attempt does not produce a false fault.
+  uint8_t selfTest() {
+    uint8_t faults = 3;
+    for (uint8_t try_ = 0; try_ < 3 && faults; try_++) {
+      faults = 0;
+      recessive();
+      delayBits(4);
+      if (!sense()) faults |= 1;
+      dominant();
+      delayBits(4);
+      if (sense()) faults |= 2;
+      recessive();
+      delayBits(8);
+    }
+    return faults;
   }
 
   uint8_t poll(BFrame* out) {

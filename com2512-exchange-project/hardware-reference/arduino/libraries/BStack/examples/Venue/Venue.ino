@@ -39,10 +39,23 @@ void publishTrade(const Fill& f) {
   bus.send(&t);
 }
 
+// Print the physical-layer verdict before anything else. A bus fault here
+// makes every counter downstream meaningless, so say so loudly.
+void reportBus(uint8_t f) {
+  if (!f) { Serial.println(F("bus OK: line rises when released, falls when driven")); return; }
+  Serial.println(F("*** BUS FAULT -- fix the wiring before reading any other counter ***"));
+  if (f & 1) Serial.println(F("  line did NOT go high when released:"
+                             " no pull-up, pull-up rail unpowered, D4 floating,"
+                             " no common ground, or a node is holding the bus low"));
+  if (f & 2) Serial.println(F("  line did NOT go low when driven:"
+                             " D4 is not connected to the bus wire"));
+}
+
 void setup() {
   bus.begin(VENUE_ID);
   Serial.begin(115200);
   Serial.println(F("venue up, id 0x01"));
+  reportBus(bus.selfTest());
 }
 
 void loop() {
