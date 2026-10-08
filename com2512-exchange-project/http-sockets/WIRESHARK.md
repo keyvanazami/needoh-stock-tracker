@@ -51,8 +51,8 @@ and capture on the real NIC. This is the better capture anyway — see
    ```
 6. **File → Save As →** `capture.pcapng`. Submit the file, not just screenshots.
 
-Both exchanges may live in one file; say in your report which packet numbers belong to
-which.
+Both exchanges may live in one file. Note which packet numbers belong to which when
+you caption your screenshots.
 
 ## Display filters worth knowing
 
@@ -91,7 +91,7 @@ readable there at all.
 
 Then **right-click → Follow → TCP Stream**. Request and response appear as one
 conversation, your side in red, the server's in blue, CRLFs rendered as line breaks.
-This is the view to screenshot for your report. **Follow → HTTP Stream** does the same
+This is screenshot 4. **Follow → HTTP Stream** does the same
 with the TCP bookkeeping stripped out.
 
 ## If HTTP is not dissected
@@ -111,8 +111,8 @@ happens. When it does not:
 
 ## What loopback distorts
 
-Say so in your report if you captured on loopback — three of your measurements are
-affected:
+If you captured on loopback, three things you see are not representative of a real
+link:
 
 - **Segment sizes.** Loopback MTU is around 65 KB, not Ethernet's 1500. Your request
   and response each fit in one segment where on a real link a large response would be

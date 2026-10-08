@@ -48,25 +48,31 @@ implementations** while appearing to work — which is the finding the whole har
 design is built around.
 
 ### `http-sockets/` — the application-layer assignment
-A standalone HTTP lab: students write an echo server and a client on raw TCP sockets
+A standalone HTTP lab: students build an echo server and a client on raw TCP sockets
 (port 8080), echo requests to stdout, and capture their own GET and POST exchanges in
-Wireshark. Needs no exchange hardware and no network access.
+Wireshark. No exchange hardware, no network access. Deliverables are code and
+screenshots — no write-up.
 
-    cd http-sockets/sample && python3 selftest.py    # 4/4, proves the reference code runs
+    cd http-sockets && python3 sockets_demo.py listen    # the socket calls, plain TCP
+    cd http-sockets/starter && python3 check.py          # grades a student server, 10 checks
 
 | path | what it is |
 |---|---|
-| `README.md`    | the handout: five graded parts, 100 marks |
-| `WIRESHARK.md` | capture procedure, the loopback-interface trap, display filters |
-| `RUBRIC.md`    | mark breakdown and deductions |
-| `sample/echo_server.py` | reference listen socket: framing, `SO_REUSEADDR`, partial `recv` |
-| `sample/http_client.py` | reference send socket: requests assembled byte by byte |
-| `sample/selftest.py`    | end-to-end check of both, on an ephemeral port |
+| `README.md`      | the handout |
+| `WIRESHARK.md`   | capture procedure, the loopback-interface trap, display filters |
+| `sockets_demo.py`| the six socket calls in plain TCP — no HTTP, nothing to fill in |
+| `starter/server.py` | skeleton, 6 TODOs: framing, routing, accept loop |
+| `starter/client.py` | skeleton, 3 TODOs: request bytes, connect/send/recv |
+| `starter/check.py`  | conformance checks students run as they work |
 
-The graded deliverable extends the sample rather than reusing it: routing, a `404`, and
-correct `Content-Length` for non-ASCII bodies. Part 4 has students break framing on
-purpose — a short `Content-Length` leaves unread bytes in the stream, which is request
-smuggling in miniature.
+`check.py` is the marking tool: it sends raw HTTP over a socket so it works before the
+student's client exists, and it catches the two failures that otherwise slip through —
+a `Content-Length` that counts characters instead of bytes, and a `recv()` loop that
+only works because the request happened to arrive in one segment. Validated against a
+reference solution (10/10) and against the untouched starter, which fails pointing at
+TODO 5.
+
+No reference solution ships in this directory, deliberately.
 
 ## Key numbers
 
