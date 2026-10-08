@@ -47,6 +47,27 @@ rejected. The CSMA/CD emulator reported **zero collisions across three successiv
 implementations** while appearing to work — which is the finding the whole hardware
 design is built around.
 
+### `http-sockets/` — the application-layer assignment
+A standalone HTTP lab: students write an echo server and a client on raw TCP sockets
+(port 8080), echo requests to stdout, and capture their own GET and POST exchanges in
+Wireshark. Needs no exchange hardware and no network access.
+
+    cd http-sockets/sample && python3 selftest.py    # 4/4, proves the reference code runs
+
+| path | what it is |
+|---|---|
+| `README.md`    | the handout: five graded parts, 100 marks |
+| `WIRESHARK.md` | capture procedure, the loopback-interface trap, display filters |
+| `RUBRIC.md`    | mark breakdown and deductions |
+| `sample/echo_server.py` | reference listen socket: framing, `SO_REUSEADDR`, partial `recv` |
+| `sample/http_client.py` | reference send socket: requests assembled byte by byte |
+| `sample/selftest.py`    | end-to-end check of both, on an ephemeral port |
+
+The graded deliverable extends the sample rather than reusing it: routing, a `404`, and
+correct `Content-Length` for non-ASCII bodies. Part 4 has students break framing on
+purpose — a short `Content-Length` leaves unread bytes in the stream, which is request
+smuggling in miniature.
+
 ## Key numbers
 
 | quantity | value | why it matters |
