@@ -86,7 +86,13 @@ language of their choosing.
 |---|---|
 | `PROTOCOL.md` | the XCHG/1 spec: envelope, CRC, validation order, message catalog |
 | `README.md`   | student handout: five build steps, deliverables, troubleshooting |
+| `TEACHER.md`  | what to hand out, how to run it for a class, what not to change |
 | `server/`     | Java source for the test server (ship the jar, keep this) |
+
+Two bundles come out of this directory: students get `PROTOCOL.md`, `README.md`
+and `xchg-server.jar` — nothing else, so there is no client to leak. Teachers get
+the same three plus `TEACHER.md`, `server/` and a ready-to-distribute copy of the
+student zip.
 
 The server is one dependency-free jar: UDP exchange, price-time-priority order
 book, built-in market maker, and the UI served from `com.sun.net.httpserver` with
