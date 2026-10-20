@@ -152,6 +152,20 @@ table.grid thead th { position: sticky; top: 0; background: var(--surface); z-in
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px;
   white-space: pre-wrap; word-break: break-all; }
 footer { padding: 0 16px 20px; color: var(--muted); font-size: 11px; }
+
+/* link banner: status-warning, always carrying its label, never colour alone */
+.linkbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--warning); border-radius: 8px;
+  padding: 8px 12px; font-size: 12px; color: var(--ink-2); }
+.linkbar .tag { font-size: 10px; font-weight: 700; letter-spacing: .09em;
+  color: var(--warning); }
+.linkbar b { color: var(--ink); }
+.linkbar .spacer { flex: 1; }
+.v-corrupt .dot { background: var(--warning); }
+.v-corrupt { color: var(--ink-2); }
+.v-delay .dot { background: var(--muted); }
+.v-delay { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -167,6 +181,14 @@ footer { padding: 0 16px 20px; color: var(--muted); font-size: 11px; }
 </header>
 
 <main>
+  <div id="linkbar" class="linkbar" hidden>
+    <span class="tag">LINK</span>
+    <b id="link-profile"></b>
+    <span id="link-desc"></span>
+    <span class="spacer"></span>
+    <span id="link-stats" class="num"></span>
+  </div>
+
   <section class="kpis" aria-label="Counters">
     <div class="kpi"><div class="label">Datagrams in</div><div class="value num" id="k-rx">0</div></div>
     <div class="kpi"><div class="label">Datagrams out</div><div class="value num" id="k-tx">0</div></div>
@@ -289,6 +311,8 @@ const sessName = id => id === 65535 ? "MM"
 
 function verdictClass(v) {
   if (v === "ok") return "v-ok";
+  if (v === "corrupted") return "v-corrupt";
+  if (v.startsWith("delayed")) return "v-delay";
   if (v.startsWith("dropped")) return "v-drop";
   return "v-err";
 }
@@ -382,7 +406,25 @@ function renderLog(log) {
   }
 }
 
+function renderLink(L) {
+  const bar = $("linkbar");
+  if (!L || L.clean) { bar.hidden = true; return; }
+  bar.hidden = false;
+  $("link-profile").textContent = L.profile;
+  $("link-desc").textContent = L.describe;
+  const bits = [];
+  if (L.dropped) bits.push(L.dropped + " dropped");
+  if (L.congestionDrops) bits.push(L.congestionDrops + " congested");
+  if (L.corrupted) bits.push(L.corrupted + " corrupted");
+  if (L.duplicated) bits.push(L.duplicated + " duplicated");
+  if (L.reordered) bits.push(L.reordered + " reordered");
+  if (L.meanDelayMs) bits.push("mean delay " + L.meanDelayMs + "ms");
+  if (L.queueIn || L.queueOut) bits.push("queue " + L.queueIn + " in / " + L.queueOut + " out");
+  $("link-stats").textContent = bits.join("  ·  ");
+}
+
 function render(st) {
+  renderLink(st.link);
   $("udpport").textContent = st.server.udpPort;
   $("uptime").textContent = ms(st.server.uptimeMs);
   $("k-rx").textContent = st.totals.rx;

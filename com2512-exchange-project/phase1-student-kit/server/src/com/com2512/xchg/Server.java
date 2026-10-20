@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -91,9 +90,8 @@ public final class Server {
 
     private final DatagramSocket socket;
     private final AtomicInteger nextSession = new AtomicInteger(1);
-    private final Random rng;
-    private final double lossProb, dupProb;
-    private final int delayMs;
+    /** Everything between this socket and the order book. See Link. */
+    public final Link link;
     private final boolean verbose;
     private final ScheduledExecutorService timers = Executors.newScheduledThreadPool(2);
 
@@ -104,14 +102,11 @@ public final class Server {
     public final long startedMs = System.currentTimeMillis();
     public final int udpPort;
 
-    public Server(int udpPort, Exchange exchange, long seed, double lossProb,
-                  double dupProb, int delayMs, int logCap, boolean verbose) throws Exception {
+    public Server(int udpPort, Exchange exchange, Link link, int logCap, boolean verbose)
+            throws Exception {
         this.udpPort = udpPort;
         this.exchange = exchange;
-        this.rng = new Random(seed ^ 0x5EEDL);
-        this.lossProb = lossProb;
-        this.dupProb = dupProb;
-        this.delayMs = delayMs;
+        this.link = link;
         this.logCap = logCap;
         this.verbose = verbose;
         this.socket = new DatagramSocket(udpPort);
@@ -138,42 +133,69 @@ public final class Server {
                 continue;
             }
             totalRx.incrementAndGet();
-            String peer = dg.getAddress().getHostAddress() + ":" + dg.getPort();
-            int len = dg.getLength();
-            String hex = Packet.hex(dg.getData(), dg.getOffset(), Math.min(len, 48));
+            final InetAddress addr = dg.getAddress();
+            final int port = dg.getPort();
+            final String peer = addr.getHostAddress() + ":" + port;
+            final int len = dg.getLength();
 
-            // Inbound impairment: pretend the datagram never arrived.
-            if (lossProb > 0 && rng.nextDouble() < lossProb) {
-                totalDropped.incrementAndGet();
-                addLog(new LogEntry(true, peer, "?", 0, 0, len, "dropped (--loss)",
-                        "the server discarded this datagram before parsing it", hex));
-                continue;
-            }
+            // The receive buffer is reused, and the link may hold a datagram for
+            // a while, so hand it a copy it can keep.
+            byte[] copy = java.util.Arrays.copyOfRange(dg.getData(), dg.getOffset(),
+                    dg.getOffset() + len);
+            // Peek at the type for type-scoped rules. This is pre-validation, so
+            // it is a guess: a corrupted datagram's "type" is whatever byte 3 is.
+            int peekType = len > 3 ? copy[3] & 0xFF : -1;
 
-            try {
-                Packet p = Packet.decode(dg.getData(), len);
-                handle(p, dg.getAddress(), dg.getPort(), peer, len, hex);
-            } catch (Packet.BadPacket bad) {
-                totalBad.incrementAndGet();
-                addLog(new LogEntry(true, peer, "?", 0, 0, len,
-                        Packet.errorName(bad.code), bad.getMessage(), hex));
-                // Reply anyway, best effort: we cannot trust the session or seq
-                // in a packet that did not decode, so both go out as 0.
-                send(dg.getAddress(), dg.getPort(), null, Packet.T_ERROR,
-                        Packet.errorPayload(bad.code, 0, bad.getMessage()));
-            } catch (Exception e) {
-                totalBad.incrementAndGet();
-                addLog(new LogEntry(true, peer, "?", 0, 0, len, "E_PAYLOAD",
-                        "payload shorter than its message type requires", hex));
-                send(dg.getAddress(), dg.getPort(), null, Packet.T_ERROR,
-                        Packet.errorPayload(Packet.E_PAYLOAD, 0,
-                                "payload too short for message type"));
-            }
+            link.submit(Link.Dir.IN, copy, len, peekType,
+                    (data, n, outcome) -> onInbound(data, n, outcome, addr, port, peer));
         }
     }
 
-    private void handle(Packet p, InetAddress addr, int port, String peer, int len, String hex)
-            throws Exception {
+    /** A datagram that survived the inbound link, now with its real decode. */
+    private void onInbound(byte[] data, int len, Link.Outcome outcome,
+                           InetAddress addr, int port, String peer) {
+        String hex = Packet.hex(data, 0, Math.min(len, 48));
+        if (!outcome.delivered) {
+            totalDropped.incrementAndGet();
+            addLog(new LogEntry(true, peer, "?", 0, 0, len, outcome.verdict,
+                    outcome.note, hex));
+            return;
+        }
+        try {
+            Packet p = Packet.decode(data, len);
+            handle(p, addr, port, peer, len, hex, outcome);
+        } catch (Packet.BadPacket bad) {
+            totalBad.incrementAndGet();
+            addLog(new LogEntry(true, peer, "?", 0, 0, len,
+                    Packet.errorName(bad.code), note(outcome, bad.getMessage()), hex));
+            // Reply anyway, best effort: we cannot trust the session or seq
+            // in a packet that did not decode, so both go out as 0.
+            send(addr, port, null, Packet.T_ERROR,
+                    Packet.errorPayload(bad.code, 0, bad.getMessage()));
+        } catch (Exception e) {
+            totalBad.incrementAndGet();
+            addLog(new LogEntry(true, peer, "?", 0, 0, len, "E_PAYLOAD",
+                    note(outcome, "payload shorter than its message type requires"), hex));
+            send(addr, port, null, Packet.T_ERROR,
+                    Packet.errorPayload(Packet.E_PAYLOAD, 0,
+                            "payload too short for message type"));
+        }
+    }
+
+    /** Prefix a log detail with what the link did to the packet, if anything. */
+    private static String note(Link.Outcome o, String detail) {
+        return (o == null || o.note.isEmpty()) ? detail : "[" + o.note + "] " + detail;
+    }
+
+    /** Inbound log entry whose detail is prefixed with what the link did. */
+    private LogEntry inEntry(Link.Outcome lo, String peer, String type, int session,
+                             int seq, int len, String verdict, String detail, String hex) {
+        return new LogEntry(true, peer, type, session, seq, len, verdict,
+                note(lo, detail), hex);
+    }
+
+    private void handle(Packet p, InetAddress addr, int port, String peer, int len,
+                        String hex, Link.Outcome lo) throws Exception {
         String key = addr.getHostAddress() + ":" + port;
 
         if (p.type == Packet.T_HELLO) {
@@ -200,7 +222,7 @@ public final class Server {
             s.rx.incrementAndGet();
             s.subscriptions.add(0);         // subscribe to everything by default
             noteSeq(s, p.seq);
-            addLog(new LogEntry(true, peer, "HELLO", p.session, p.seq, len, "ok",
+            addLog(inEntry(lo, peer, "HELLO", p.session, p.seq, len, "ok",
                     "team=\"" + team + "\" -> session " + s.id, hex));
             sendWelcome(s);
             publishQuote(s, 0);
@@ -209,7 +231,7 @@ public final class Server {
 
         Session s = sessions.get(key);
         if (s == null) {
-            addLog(new LogEntry(true, peer, Packet.typeName(p.type), p.session, p.seq, len,
+            addLog(inEntry(lo, peer, Packet.typeName(p.type), p.session, p.seq, len,
                     "E_NOHELLO", "no session for " + key + "; send HELLO first", hex));
             send(addr, port, null, Packet.T_ERROR,
                     Packet.errorPayload(Packet.E_NOHELLO, p.seq, "send HELLO first"));
@@ -217,7 +239,7 @@ public final class Server {
         }
         if (p.session != s.id) {
             s.rejected.incrementAndGet();
-            addLog(new LogEntry(true, peer, Packet.typeName(p.type), p.session, p.seq, len,
+            addLog(inEntry(lo, peer, Packet.typeName(p.type), p.session, p.seq, len,
                     "E_SESSION", "SESSION " + p.session + " but this address holds session " + s.id, hex));
             send(addr, port, s, Packet.T_ERROR, Packet.errorPayload(Packet.E_SESSION, p.seq,
                     "wrong session, yours is " + s.id));
@@ -228,7 +250,7 @@ public final class Server {
         if (now - s.rateWindowStart >= 1000) { s.rateWindowStart = now; s.rateCount.set(0); }
         if (s.rateCount.incrementAndGet() > RATE_LIMIT_PER_SEC) {
             s.rejected.incrementAndGet();
-            addLog(new LogEntry(true, peer, Packet.typeName(p.type), p.session, p.seq, len,
+            addLog(inEntry(lo, peer, Packet.typeName(p.type), p.session, p.seq, len,
                     "E_RATE", "over " + RATE_LIMIT_PER_SEC + " packets/sec", hex));
             send(addr, port, s, Packet.T_ERROR, Packet.errorPayload(Packet.E_RATE, p.seq,
                     "rate limit " + RATE_LIMIT_PER_SEC + "/s"));
@@ -240,19 +262,19 @@ public final class Server {
         noteSeq(s, p.seq);
 
         switch (p.type) {
-            case Packet.T_ORDER:    onOrder(s, p, peer, len, hex); break;
-            case Packet.T_CANCEL:   onCancel(s, p, peer, len, hex); break;
-            case Packet.T_SUBSCRIBE: onSubscribe(s, p, peer, len, hex); break;
-            case Packet.T_PING:     onPing(s, p, peer, len, hex); break;
+            case Packet.T_ORDER:    onOrder(s, p, peer, len, hex, lo); break;
+            case Packet.T_CANCEL:   onCancel(s, p, peer, len, hex, lo); break;
+            case Packet.T_SUBSCRIBE: onSubscribe(s, p, peer, len, hex, lo); break;
+            case Packet.T_PING:     onPing(s, p, peer, len, hex, lo); break;
             case Packet.T_BYE:
-                addLog(new LogEntry(true, peer, "BYE", p.session, p.seq, len, "ok",
+                addLog(inEntry(lo, peer, "BYE", p.session, p.seq, len, "ok",
                         "session " + s.id + " closed, resting orders cancelled", hex));
                 exchange.cancelAllFor(s.id);
                 sessions.remove(s.key());
                 break;
             default:
                 s.rejected.incrementAndGet();
-                addLog(new LogEntry(true, peer, Packet.typeName(p.type), p.session, p.seq, len,
+                addLog(inEntry(lo, peer, Packet.typeName(p.type), p.session, p.seq, len,
                         "E_TYPE", "server does not accept this type from a client", hex));
                 send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_TYPE, p.seq,
                         "unexpected type " + Packet.typeName(p.type)));
@@ -271,10 +293,11 @@ public final class Server {
 
     // ---- message handlers -------------------------------------------------
 
-    private void onOrder(Session s, Packet p, String peer, int len, String hex) {
+    private void onOrder(Session s, Packet p, String peer, int len, String hex,
+                         Link.Outcome lo) {
         if (p.payload.length != 11) {
             s.rejected.incrementAndGet();
-            addLog(new LogEntry(true, peer, "ORDER", p.session, p.seq, len, "E_PAYLOAD",
+            addLog(inEntry(lo, peer, "ORDER", p.session, p.seq, len, "E_PAYLOAD",
                     "ORDER payload is " + p.payload.length + " bytes, spec says 11", hex));
             send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_PAYLOAD, p.seq,
                     "ORDER payload must be 11 bytes, got " + p.payload.length));
@@ -298,7 +321,7 @@ public final class Server {
                 qty, price, Packet.statusName(r.status),
                 r.status == Packet.ST_REJECTED ? " (" + Packet.reasonName(r.reason) + ")" : "",
                 r.filledQty, r.restQty);
-        addLog(new LogEntry(true, peer, "ORDER", p.session, p.seq, len, "ok", detail, hex));
+        addLog(inEntry(lo, peer, "ORDER", p.session, p.seq, len, "ok", detail, hex));
 
         send(s, Packet.T_ACK, Packet.ackPayload(clOrdId, r.orderId, r.status, r.reason,
                 r.filledQty, r.restQty));
@@ -306,10 +329,11 @@ public final class Server {
         if (!r.trades.isEmpty() || r.restQty > 0) publishQuoteAll(sym);
     }
 
-    private void onCancel(Session s, Packet p, String peer, int len, String hex) {
+    private void onCancel(Session s, Packet p, String peer, int len, String hex,
+                         Link.Outcome lo) {
         if (p.payload.length != 8) {
             s.rejected.incrementAndGet();
-            addLog(new LogEntry(true, peer, "CANCEL", p.session, p.seq, len, "E_PAYLOAD",
+            addLog(inEntry(lo, peer, "CANCEL", p.session, p.seq, len, "E_PAYLOAD",
                     "CANCEL payload is " + p.payload.length + " bytes, spec says 8", hex));
             send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_PAYLOAD, p.seq,
                     "CANCEL payload must be 8 bytes, got " + p.payload.length));
@@ -319,7 +343,7 @@ public final class Server {
         long orderId = Packet.getU32(p.payload, 4);
         Exchange.Result r = exchange.cancel(s.id, clOrdId, orderId);
         if (r.status == Packet.ST_REJECTED) s.rejected.incrementAndGet();
-        addLog(new LogEntry(true, peer, "CANCEL", p.session, p.seq, len, "ok",
+        addLog(inEntry(lo, peer, "CANCEL", p.session, p.seq, len, "ok",
                 String.format("orderId=%d -> %s%s", orderId, Packet.statusName(r.status),
                         r.status == Packet.ST_REJECTED ? " (" + Packet.reasonName(r.reason) + ")" : ""),
                 hex));
@@ -328,10 +352,11 @@ public final class Server {
         for (Exchange.Symbol sy : exchange.symbols()) publishQuoteAll(sy.id);
     }
 
-    private void onSubscribe(Session s, Packet p, String peer, int len, String hex) {
+    private void onSubscribe(Session s, Packet p, String peer, int len, String hex,
+                         Link.Outcome lo) {
         if (p.payload.length != 2) {
             s.rejected.incrementAndGet();
-            addLog(new LogEntry(true, peer, "SUBSCRIBE", p.session, p.seq, len, "E_PAYLOAD",
+            addLog(inEntry(lo, peer, "SUBSCRIBE", p.session, p.seq, len, "E_PAYLOAD",
                     "SUBSCRIBE payload is " + p.payload.length + " bytes, spec says 2", hex));
             send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_PAYLOAD, p.seq,
                     "SUBSCRIBE payload must be 2 bytes, got " + p.payload.length));
@@ -339,7 +364,7 @@ public final class Server {
         }
         int sym = Packet.getU16(p.payload, 0);
         if (sym != 0 && !exchange.knownSymbol(sym)) {
-            addLog(new LogEntry(true, peer, "SUBSCRIBE", p.session, p.seq, len, "E_PAYLOAD",
+            addLog(inEntry(lo, peer, "SUBSCRIBE", p.session, p.seq, len, "E_PAYLOAD",
                     "unknown symbol id " + sym, hex));
             send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_PAYLOAD, p.seq,
                     "unknown symbol " + sym));
@@ -347,21 +372,22 @@ public final class Server {
         }
         if (sym == 0) { s.subscriptions.clear(); s.subscriptions.add(0); }
         else { s.subscriptions.remove(0); s.subscriptions.add(sym); }
-        addLog(new LogEntry(true, peer, "SUBSCRIBE", p.session, p.seq, len, "ok",
+        addLog(inEntry(lo, peer, "SUBSCRIBE", p.session, p.seq, len, "ok",
                 sym == 0 ? "all symbols" : ("symbol " + sym), hex));
         publishQuote(s, sym);
     }
 
-    private void onPing(Session s, Packet p, String peer, int len, String hex) {
+    private void onPing(Session s, Packet p, String peer, int len, String hex,
+                         Link.Outcome lo) {
         if (p.payload.length != 8) {
             s.rejected.incrementAndGet();
-            addLog(new LogEntry(true, peer, "PING", p.session, p.seq, len, "E_PAYLOAD",
+            addLog(inEntry(lo, peer, "PING", p.session, p.seq, len, "E_PAYLOAD",
                     "PING payload is " + p.payload.length + " bytes, spec says 8", hex));
             send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_PAYLOAD, p.seq,
                     "PING payload must be 8 bytes, got " + p.payload.length));
             return;
         }
-        addLog(new LogEntry(true, peer, "PING", p.session, p.seq, len, "ok",
+        addLog(inEntry(lo, peer, "PING", p.session, p.seq, len, "ok",
                 "echo=" + Packet.hex(p.payload), hex));
         send(s, Packet.T_PONG, p.payload.clone());
     }
@@ -414,7 +440,7 @@ public final class Server {
         send(s.addr, s.port, s, type, payload);
     }
 
-    /** Encode, apply outbound impairment, transmit. `s` may be null (pre-session). */
+    /** Encode, hand to the link, and transmit whatever survives it. */
     private void send(InetAddress addr, int port, Session s, int type, byte[] payload) {
         int seq = (s == null) ? 0 : s.txSeq.incrementAndGet() & 0xFFFF;
         int sess = (s == null) ? 0 : s.id;
@@ -422,40 +448,36 @@ public final class Server {
         String peer = addr.getHostAddress() + ":" + port;
         String detail = describeOutbound(type, payload);
 
-        if (lossProb > 0 && rng.nextDouble() < lossProb) {
-            totalDropped.incrementAndGet();
-            addLog(new LogEntry(false, peer, Packet.typeName(type), sess, seq, dgram.length,
-                    "dropped (--loss)", detail + " [never left the server]",
-                    Packet.hex(dgram, 0, Math.min(dgram.length, 48))));
-            return;
-        }
-        transmit(addr, port, dgram, s, type, sess, seq, detail, peer);
-        if (dupProb > 0 && rng.nextDouble() < dupProb) {
-            transmit(addr, port, dgram, s, type, sess, seq, detail + " [duplicate]", peer);
-        }
-    }
-
-    private void transmit(InetAddress addr, int port, byte[] dgram, Session s, int type,
-                          int sess, int seq, String detail, String peer) {
         // An outbound ERROR transmitted successfully is still a rejection: log it
         // under the error's own name so the UI does not mark it green "ok" and
         // the inbound/outbound pair reads as one event.
-        final String verdict = (type == Packet.T_ERROR && dgram.length > Packet.HEADER_LEN)
+        final String baseVerdict = (type == Packet.T_ERROR && dgram.length > Packet.HEADER_LEN)
                 ? Packet.errorName(dgram[Packet.HEADER_LEN] & 0xFF) : "ok";
-        Runnable job = () -> {
+
+        link.submit(Link.Dir.OUT, dgram, dgram.length, type, (data, len, outcome) -> {
+            if (!outcome.delivered) {
+                totalDropped.incrementAndGet();
+                addLog(new LogEntry(false, peer, Packet.typeName(type), sess, seq, len,
+                        outcome.verdict, detail + " [" + outcome.note + "]",
+                        Packet.hex(data, 0, Math.min(len, 48))));
+                return;
+            }
             try {
-                socket.send(new DatagramPacket(dgram, dgram.length, addr, port));
+                socket.send(new DatagramPacket(data, len, addr, port));
                 totalTx.incrementAndGet();
                 if (s != null) s.tx.incrementAndGet();
-                addLog(new LogEntry(false, peer, Packet.typeName(type), sess, seq, dgram.length,
-                        verdict, detail, Packet.hex(dgram, 0, Math.min(dgram.length, 48))));
+                // The link may have corrupted the bytes on the way out. That is
+                // the student's problem to detect, so log what actually left.
+                String verdict = outcome.verdict.equals("ok") ? baseVerdict : outcome.verdict;
+                addLog(new LogEntry(false, peer, Packet.typeName(type), sess, seq, len,
+                        verdict, outcome.note.isEmpty() ? detail
+                                : detail + " [" + outcome.note + "]",
+                        Packet.hex(data, 0, Math.min(len, 48))));
             } catch (Exception e) {
-                addLog(new LogEntry(false, peer, Packet.typeName(type), sess, seq, dgram.length,
+                addLog(new LogEntry(false, peer, Packet.typeName(type), sess, seq, len,
                         "send failed", String.valueOf(e), ""));
             }
-        };
-        if (delayMs > 0) timers.schedule(job, delayMs, TimeUnit.MILLISECONDS);
-        else job.run();
+        });
     }
 
     private String describeOutbound(int type, byte[] p) {
@@ -556,6 +578,7 @@ public final class Server {
 
     public void close() {
         timers.shutdownNow();
+        link.close();
         socket.close();
     }
 }

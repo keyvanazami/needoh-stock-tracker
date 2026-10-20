@@ -67,19 +67,43 @@ client should show a running top-of-book.
 
 ## Then break the link
 
-The server will misbehave on request:
+The server can pretend to be a bad network. Pick a condition by name:
 
 ```bash
-java -jar xchg-server.jar --loss 0.2 --dup 0.1 --delay 50
+java -jar xchg-server.jar --link list        # every profile, with what it does
+java -jar xchg-server.jar --link lossy       # 20% of datagrams vanish
+java -jar xchg-server.jar --link slow        # 64kbps, 200ms latency
+java -jar xchg-server.jar --link busy        # a congested link: delay rises, then drops
+java -jar xchg-server.jar --link corrupt     # bit flips; your CRC check has to catch them
+java -jar xchg-server.jar --link flaky-acks  # orders get through, ACKs mostly do not
 ```
 
-20% of datagrams vanish in each direction, 10% of replies arrive twice, and
-everything is held 50 ms. Point your working client at it.
+The active profile and what it is doing to you appear across the top of the UI,
+and the packet log tags each datagram — `queued 24ms, serialised 10ms`,
+`bit flipped at byte 14 (payload) bit 3`, `tail-dropped: queue full`.
 
-You are **not** asked to fix this in Phase 1 — you are asked to see it, and to
-measure it. Count the gaps in the server's `SEQ` numbers, count the duplicates,
-and make your client survive a missing `ACK` without hanging forever. Phase 2 is
-where you build reliability on this exact envelope.
+You are **not** asked to fix any of this in Phase 1 — you are asked to see it and
+measure it. Three worth doing:
+
+- **`--link flaky-acks`.** Your order reaches the book and executes, but the ACK
+  is lost or arrives corrupt. Your client cannot tell "my order never arrived"
+  from "the reply never came back", and resending blindly would double your
+  position. Sit with that; it is the problem Phase 2 exists to solve.
+- **`--link corrupt`.** A corrupted packet is not a lost one: it arrives, and it
+  is *wrong*. If your client skips the CRC check it will read garbage prices as
+  real. Verify every packet before you believe it.
+- **`--link busy`.** Watch the mean delay in the UI climb as the queue fills, and
+  then watch packets start disappearing without any loss setting. That is
+  congestion: delay first, loss second.
+
+Anything can be tuned, and single effects can be aimed at one message type:
+
+```bash
+java -jar xchg-server.jar --link slow --bandwidth 32k
+java -jar xchg-server.jar --impair out:ACK:corrupt=0.5    # only the ACKs
+java -jar xchg-server.jar --impair out:QUOTE:drop=1.0     # no market data at all
+java -jar xchg-server.jar --loss 0.2 --jitter 100 --reorder 0.1
+```
 
 Everything is seeded, so `--seed 7` twice gives the same run twice.
 

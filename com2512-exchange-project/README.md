@@ -91,8 +91,17 @@ language of their choosing.
 The server is one dependency-free jar: UDP exchange, price-time-priority order
 book, built-in market maker, and the UI served from `com.sun.net.httpserver` with
 the page embedded as a jar resource. It also runs as a student tool —
-`--vectors` prints the acceptance vectors, `--decode "<hex>"` explains one packet
-field by field, `--loss/--dup/--delay` impair the link reproducibly.
+`--vectors` prints the acceptance vectors and `--decode "<hex>"` explains one
+packet field by field.
+
+`Link.java` is the emulated network, sitting between the socket and the order
+book, so everything below it is written as if the network were perfect.
+`--link list` names the conditions (`slow`, `busy`, `congested`, `lossy`,
+`corrupt`, `flaky-acks`, `quiet-book`, `satellite`, `mobile`), and
+`--impair out:ACK:corrupt=0.5` aims one effect at one message type in one
+direction. Congestion is modelled as a queue rather than a probability: delay
+rises with load until the queue overflows, so congestive loss emerges instead of
+being dialled in. A new condition is one `case` in `Link.applyPreset`.
 
 Three decisions worth keeping if this gets rewritten:
 

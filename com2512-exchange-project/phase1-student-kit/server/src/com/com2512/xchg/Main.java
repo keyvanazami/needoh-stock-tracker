@@ -1,6 +1,9 @@
 package com.com2512.xchg;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * COM2512 Phase 1 exchange test server.
@@ -18,13 +21,16 @@ public final class Main {
     public static void main(String[] args) throws Exception {
         int udpPort = 9001, webPort = 9000, mmInterval = 1000, logCap = 400;
         int mmSpread = 4, mmSize = 10;
-        long seed = 2512;
-        double loss = 0.0, dup = 0.0;
-        int delayMs = 0;
         boolean mm = true, verbose = false, noWeb = false;
 
+        // Everything between the socket and the order book lives in Link.
+        Link.Config link = new Link.Config();
+        List<String> impairArgs = new ArrayList<>();
+
+        final int[] iv = new int[1];
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
+            iv[0] = i + 1;          // index of this flag's value, for the lambdas
             try {
                 switch (a) {
                     case "--help": case "-h": usage(); return;
@@ -35,10 +41,35 @@ public final class Main {
                     case "--udp-port": udpPort = Integer.parseInt(args[++i]); break;
                     case "--web-port": webPort = Integer.parseInt(args[++i]); break;
                     case "--no-web": noWeb = true; break;
-                    case "--loss": loss = Double.parseDouble(args[++i]); break;
-                    case "--dup": dup = Double.parseDouble(args[++i]); break;
-                    case "--delay": delayMs = Integer.parseInt(args[++i]); break;
-                    case "--seed": seed = Long.parseLong(args[++i]); break;
+                    case "--link": {
+                        String name = args[++i];
+                        if ("list".equals(name)) { linkList(); return; }
+                        if (!Link.applyPreset(link, name)) {
+                            System.err.println("unknown link profile: " + name);
+                            linkList();
+                            System.exit(2);
+                        }
+                        link.profile = name;
+                        break;
+                    }
+                    // Global per-packet effects, both directions, every type.
+                    case "--loss": both(link).forEach(e -> e.loss = pd(args[iv[0]])); i++; break;
+                    case "--dup": both(link).forEach(e -> e.dup = pd(args[iv[0]])); i++; break;
+                    case "--corrupt": both(link).forEach(e -> e.corrupt = pd(args[iv[0]])); i++; break;
+                    case "--reorder": both(link).forEach(e -> e.reorder = pd(args[iv[0]])); i++; break;
+                    case "--delay": case "--latency":
+                        both(link).forEach(e -> e.latencyMs = pi(args[iv[0]])); i++; break;
+                    case "--jitter": both(link).forEach(e -> e.jitterMs = pi(args[iv[0]])); i++; break;
+                    case "--corrupt-bits":
+                        both(link).forEach(e -> e.corruptBits = pi(args[iv[0]])); i++; break;
+                    // Congestion.
+                    case "--bandwidth": link.bandwidthBps = parseBps(args[++i]); break;
+                    case "--busy": link.busyLoad = Double.parseDouble(args[++i]); break;
+                    case "--queue": link.queueCapacity = Integer.parseInt(args[++i]); break;
+                    case "--max-wait": link.queueMaxDelayMs = Integer.parseInt(args[++i]); break;
+                    // Scoped rules, e.g. --impair out:ACK:corrupt=0.5
+                    case "--impair": impairArgs.add(args[++i]); break;
+                    case "--seed": link.seed = Long.parseLong(args[++i]); break;
                     case "--no-mm": mm = false; break;
                     case "--mm-interval": mmInterval = Integer.parseInt(args[++i]); break;
                     case "--mm-spread": mmSpread = Integer.parseInt(args[++i]); break;
@@ -59,8 +90,20 @@ public final class Main {
             }
         }
 
-        if (loss < 0 || loss > 1 || dup < 0 || dup > 1) {
-            System.err.println("--loss and --dup are probabilities between 0 and 1");
+        for (String rule : impairArgs) {
+            String err = applyImpairRule(link, rule);
+            if (err != null) {
+                System.err.println("--impair " + rule + ": " + err);
+                System.err.println("  form: [in|out][:TYPE]:effect=value"
+                        + "   e.g. out:ACK:corrupt=0.5   in:loss=0.2");
+                System.exit(2);
+            }
+        }
+        // Bare flags without --link still make the link dirty; do not call it "clean".
+        if (link.profile.equals("clean") && !link.isClean()) link.profile = "custom";
+
+        if (link.busyLoad < 0 || link.busyLoad >= 1) {
+            System.err.println("--busy must be between 0 and 0.95");
             System.exit(2);
         }
 
@@ -71,8 +114,8 @@ public final class Main {
             System.exit(1);
         }
 
-        Exchange exchange = new Exchange(seed, mm, mmSpread, mmSize);
-        Server server = new Server(udpPort, exchange, seed, loss, dup, delayMs, logCap, verbose);
+        Exchange exchange = new Exchange(link.seed, mm, mmSpread, mmSize);
+        Server server = new Server(udpPort, exchange, new Link(link), logCap, verbose);
 
         System.out.println(VERSION);
         System.out.println("  exchange   UDP  0.0.0.0:" + udpPort);
@@ -82,8 +125,8 @@ public final class Main {
             System.out.println("  UI         http://localhost:" + webPort + "/");
         }
         System.out.printf("  symbols    %s%n", tickerList(exchange));
-        System.out.printf("  impairment loss=%.0f%% dup=%.0f%% delay=%dms  (seed %d)%n",
-                loss * 100, dup * 100, delayMs, seed);
+        System.out.printf("  link       %s%n", link.profile);
+        System.out.printf("             %s  (seed %d)%n", link.describe(), link.seed);
         System.out.printf("  market maker %s, every %dms%n", mm ? "on" : "off", mmInterval);
         System.out.println("  heartbeat  send PING every " + Server.HEARTBEAT_MS
                 + "ms or the session expires after " + Server.SESSION_TTL_MS + "ms");
@@ -300,6 +343,141 @@ public final class Main {
         }
     }
 
+
+    // ---- link flag helpers -------------------------------------------------
+
+    /** The two global Effects, so a plain flag hits both directions. */
+    private static List<Link.Effects> both(Link.Config c) {
+        return List.of(c.global.get(Link.Dir.IN), c.global.get(Link.Dir.OUT));
+    }
+
+    private static double pd(String v) {
+        double d = Double.parseDouble(v);
+        if (d < 0 || d > 1) throw new NumberFormatException("expected a probability 0..1, got " + v);
+        return d;
+    }
+
+    private static int pi(String v) { return Integer.parseInt(v); }
+
+    /** Accepts 64000, 64k, 1M, 256kbps. */
+    static long parseBps(String v) {
+        String t = v.trim().toLowerCase(java.util.Locale.ROOT).replace("bps", "").replace("b", "");
+        long mult = 1;
+        if (t.endsWith("k")) { mult = 1_000; t = t.substring(0, t.length() - 1); }
+        else if (t.endsWith("m")) { mult = 1_000_000; t = t.substring(0, t.length() - 1); }
+        return (long) (Double.parseDouble(t) * mult);
+    }
+
+    /**
+     * Parse one scoped rule: [in|out][:TYPE]:effect=value
+     *
+     *   out:ACK:corrupt=0.5     corrupt half the ACKs leaving the server
+     *   in:loss=0.2             drop a fifth of what arrives
+     *   out:QUOTE:drop=1.0      cut market data off entirely
+     *   ORDER:latency=500       both directions, ORDER only
+     *
+     * Returns null on success, or a message describing what was wrong.
+     */
+    static String applyImpairRule(Link.Config c, String rule) {
+        int eq = rule.lastIndexOf('=');
+        if (eq < 0) return "no '=' in the rule";
+        String lhs = rule.substring(0, eq);
+        String value = rule.substring(eq + 1).trim();
+
+        String[] parts = lhs.split(":");
+        if (parts.length == 0) return "nothing before the '='";
+        String effect = parts[parts.length - 1].trim().toLowerCase(java.util.Locale.ROOT);
+
+        List<Link.Dir> dirs = List.of(Link.Dir.IN, Link.Dir.OUT);
+        Integer type = null;
+        for (int i = 0; i < parts.length - 1; i++) {
+            String tok = parts[i].trim();
+            if (tok.isEmpty()) continue;
+            if (tok.equalsIgnoreCase("in")) dirs = List.of(Link.Dir.IN);
+            else if (tok.equalsIgnoreCase("out")) dirs = List.of(Link.Dir.OUT);
+            else {
+                type = typeByName(tok);
+                if (type == null) return "unknown message type '" + tok + "'";
+            }
+        }
+
+        for (Link.Dir d : dirs) {
+            if (type == null) {
+                Link.Effects e = c.global.get(d);
+                String err = setEffect(e, effect, value);
+                if (err != null) return err;
+            } else {
+                Link.Override o = c.scoped(d, type);
+                String err = setOverride(o, effect, value);
+                if (err != null) return err;
+            }
+        }
+        if (c.profile.equals("clean")) c.profile = "custom";
+        return null;
+    }
+
+    private static Integer typeByName(String name) {
+        for (int t = 0; t <= 0xFF; t++) {
+            String n = Packet.typeName(t);
+            if (n.equalsIgnoreCase(name)) return t;
+        }
+        try {
+            String h = name.toLowerCase(java.util.Locale.ROOT);
+            return Integer.parseInt(h.startsWith("0x") ? h.substring(2) : h, 16);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String setEffect(Link.Effects e, String effect, String v) {
+        try {
+            switch (effect) {
+                case "loss": case "drop": e.loss = pd(v); return null;
+                case "corrupt": e.corrupt = pd(v); return null;
+                case "dup": case "duplicate": e.dup = pd(v); return null;
+                case "reorder": e.reorder = pd(v); return null;
+                case "latency": case "delay": e.latencyMs = pi(v); return null;
+                case "jitter": e.jitterMs = pi(v); return null;
+                case "bits": case "corrupt-bits": e.corruptBits = pi(v); return null;
+                case "reorder-ms": e.reorderMs = pi(v); return null;
+                default: return "unknown effect '" + effect + "'";
+            }
+        } catch (NumberFormatException ex) {
+            return "bad value '" + v + "': " + ex.getMessage();
+        }
+    }
+
+    private static String setOverride(Link.Override o, String effect, String v) {
+        try {
+            switch (effect) {
+                case "loss": case "drop": o.loss = pd(v); return null;
+                case "corrupt": o.corrupt = pd(v); return null;
+                case "dup": case "duplicate": o.dup = pd(v); return null;
+                case "reorder": o.reorder = pd(v); return null;
+                case "latency": case "delay": o.latencyMs = pi(v); return null;
+                case "jitter": o.jitterMs = pi(v); return null;
+                case "bits": case "corrupt-bits": o.corruptBits = pi(v); return null;
+                case "reorder-ms": o.reorderMs = pi(v); return null;
+                default: return "unknown effect '" + effect + "'";
+            }
+        } catch (NumberFormatException ex) {
+            return "bad value '" + v + "': " + ex.getMessage();
+        }
+    }
+
+    private static void linkList() {
+        System.out.println("link profiles (--link NAME):");
+        for (Map.Entry<String, String> e : Link.presetHelp().entrySet())
+            System.out.printf("  %-11s %s%n", e.getKey(), e.getValue());
+        System.out.println();
+        System.out.println("Any profile can be adjusted with the flags below it, and with");
+        System.out.println("scoped rules:  --impair [in|out][:TYPE]:effect=value");
+        System.out.println("  --impair out:ACK:corrupt=0.5     corrupt half the ACKs");
+        System.out.println("  --impair in:loss=0.2             drop a fifth of what arrives");
+        System.out.println("  --impair out:QUOTE:drop=1.0      cut market data off entirely");
+        System.out.println("effects: loss drop corrupt dup reorder latency jitter bits reorder-ms");
+    }
+
     private static void usage() {
         System.out.println(VERSION);
         System.out.println("""
@@ -317,10 +495,27 @@ public final class Main {
               --web-port N          UI port (default 9000)
               --no-web              run without the UI
 
-            link impairment (all off by default)
-              --loss P              drop each datagram with probability P, both directions
-              --dup P               send each reply twice with probability P
-              --delay MS            hold every reply MS before sending
+            network conditions (clean by default) -- see Link.java
+              --link NAME           a named profile; --link list prints them all
+              --impair RULE         scoped rule, repeatable:
+                                    [in|out][:TYPE]:effect=value
+                                    e.g. out:ACK:corrupt=0.5, in:loss=0.2
+
+              per-packet effects (both directions, every message type)
+              --loss P              drop a datagram with probability P
+              --corrupt P           flip a bit in it with probability P
+              --dup P               deliver it twice with probability P
+              --reorder P           hold it back so later packets overtake it
+              --latency MS          fixed one-way delay (--delay is an alias)
+              --jitter MS           random extra delay, 0..MS
+              --corrupt-bits N      bits to flip when corrupting (default 1)
+
+              congestion (a queue, not a probability: delay rises with load)
+              --bandwidth BPS       link rate, e.g. 64k, 256kbps, 1M
+              --busy F              fraction of the link used by other traffic, 0..0.95
+              --queue N             datagrams in flight before tail-dropping
+              --max-wait MS         drop rather than queue longer than this
+
               --seed N              RNG seed, so a run is reproducible (default 2512)
 
             market

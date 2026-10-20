@@ -38,6 +38,7 @@ No client exists anywhere in the kit, so there is nothing to leak.
 |---|---|
 | `Crc16.java` | CRC-16/CCITT-FALSE + the course check values |
 | `Packet.java` | the XCHG/1 envelope: constants, encode, decode, error codes |
+| `Link.java` | **the emulated network**: every datagram crosses it in both directions |
 | `Exchange.java` | price-time-priority limit order book, matching, market maker |
 | `Server.java` | UDP receive loop, soft sessions, impairment, packet log |
 | `WebUi.java` | `com.sun.net.httpserver` + the `/api/state` JSON snapshot |
@@ -64,11 +65,87 @@ questions before they are asked.
 For a single student working alone, the built-in market maker means the book is
 never empty. `--no-mm` turns it off if you want them to face an empty book.
 
-## Options worth knowing
+## Simulating a bad network
+
+`Link.java` sits between the socket and the order book:
+
+```
+DatagramSocket  <->  Link  <->  Server dispatch  <->  Exchange (order book)
+```
+
+Everything below the link is written as if the network were perfect — the order
+book has no idea it is being tested over a bad connection. Add conditions here
+and nothing else changes.
+
+```bash
+java -jar xchg-server.jar --link list        # the profiles, with what each does
+java -jar xchg-server.jar --link busy
+```
+
+| profile | what it is |
+|---|---|
+| `clean` | no impairment (default) |
+| `slow` | 64kbps, 200ms latency, 40ms jitter |
+| `busy` | 256kbps, 85% cross traffic, 24-deep queue |
+| `congested` | 128kbps, 95% cross traffic, 16-deep queue, 400ms max wait |
+| `lossy` | 20% loss both directions |
+| `corrupt` | 15% of datagrams get a bit flipped |
+| `flaky-acks` | ACKs only: 40% lost, 25% corrupted |
+| `quiet-book` | QUOTE and TRADE 50% lost; order flow untouched |
+| `satellite` | 600ms latency, 50ms jitter, 2% loss |
+| `mobile` | 120ms latency, 150ms jitter, 5% loss, 10% reorder |
+
+### Two models, deliberately different
+
+**Per-packet events** — `loss`, `corrupt`, `dup`, `reorder` — are independent
+coin flips, scoped by direction and message type.
+
+**Congestion** — `--bandwidth`, `--busy`, `--queue`, `--max-wait` — is not a
+probability. Each datagram occupies the link for its serialisation time, a queue
+forms behind it, and delay *rises with load* until the queue overflows and
+packets are tail-dropped. Congestive loss emerges rather than being dialled in,
+which is the whole reason to simulate it instead of faking it with `--loss`:
+students see delay climb first and loss arrive second, in that order.
+
+### Flags
 
 | flag | effect |
 |---|---|
-| `--loss P --dup P --delay MS` | impair the link; `--seed N` makes a run reproducible |
+| `--link NAME` | a named profile; later flags override it |
+| `--impair RULE` | scoped rule, repeatable — see below |
+| `--loss P` `--corrupt P` `--dup P` `--reorder P` | per-packet events, both directions |
+| `--latency MS` `--jitter MS` `--corrupt-bits N` | timing and corruption depth |
+| `--bandwidth BPS` | link rate: `64k`, `256kbps`, `1M` |
+| `--busy F` | fraction of the link other traffic is using, 0..0.95 |
+| `--queue N` `--max-wait MS` | queue depth and the tail-drop thresholds |
+| `--seed N` | reproducible runs |
+
+Scoped rules are `[in|out][:TYPE]:effect=value`:
+
+```bash
+--impair out:ACK:corrupt=0.5     # corrupt half the ACKs, nothing else
+--impair in:loss=0.2             # drop a fifth of what arrives
+--impair out:QUOTE:drop=1.0      # market data off; order flow unaffected
+--impair ORDER:latency=500       # both directions, ORDER only
+```
+
+Effects: `loss` (alias `drop`), `corrupt`, `dup`, `reorder`, `latency` (alias
+`delay`), `jitter`, `bits`, `reorder-ms`. Precedence is profile, then global
+flags, then scoped rules — most specific wins.
+
+### Adding a condition
+
+A new named profile is one `case` in `Link.applyPreset` plus a row in
+`Link.presetHelp()`; the flags, the UI banner and `--link list` pick it up with
+no other change. A genuinely new *kind* of impairment (bursty Gilbert-Elliott
+loss, a token bucket, a path that flaps) is a field on `Link.Effects` or
+`Link.Config` and a branch in `Link.submit` — the one place every datagram
+passes through. `Server` and `Exchange` do not change either way.
+
+### Other options
+
+| flag | effect |
+|---|---|
 | `--no-mm`, `--mm-spread`, `--mm-size`, `--mm-interval` | tune or remove the market maker |
 | `--verbose` | print every packet to stdout as well as the UI |
 | `--no-web` | headless, for a machine with no browser |
@@ -78,6 +155,8 @@ never empty. `--no-mm` turns it off if you want them to face an empty book.
 
 The pieces a later phase will want are already separated: `Packet` knows the
 envelope and nothing about markets, `Exchange` knows markets and nothing about
-sockets, and `Server` is the only thing that touches `DatagramSocket`. Phase 2's
-R-UDP sits between `Server` and `Packet` without either of the other two
-changing.
+sockets, `Server` is the only thing that touches `DatagramSocket`, and `Link` is
+the only thing that decides a datagram's fate. Phase 2's R-UDP sits between
+`Server` and `Packet` without any of the others changing — and it gets a ready
+made test rig, since `--link flaky-acks` is exactly the case retransmission has
+to survive.

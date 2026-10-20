@@ -286,11 +286,17 @@ Deliberately. UDP gives you no delivery guarantee, no ordering guarantee, and no
 duplicate suppression, and **Phase 1 does not ask you to fix any of that** — it
 asks you to see it.
 
-Run the server with `--loss 0.2 --dup 0.1 --delay 50` and watch what happens to
-a client that assumes a reply always arrives. The `SEQ` field is how you measure
-it: the server's packets to you carry their own increasing `SEQ`, so a gap means
-a datagram died in the kernel, and a repeat means you got a duplicate. The UI
-shows you the same accounting from the server's side, for your stream.
+Run the server with `--link lossy`, `--link corrupt` or `--link flaky-acks` and
+watch what happens to a client that assumes a reply always arrives. The `SEQ`
+field is how you measure it: the server's packets to you carry their own
+increasing `SEQ`, so a gap means a datagram died and a repeat means you got a
+duplicate. The UI shows the same accounting from the server's side, for your
+stream.
+
+Note that a **corrupted** packet is a different failure from a lost one. It
+arrives, so your socket hands it to you; only the CRC tells you it is rubbish.
+Check it before you believe anything in it — including the `SEQ` you are using
+to count the others.
 
 Retransmission, acknowledgement, windowing and ordered delivery are Phase 2,
 where you will build R-UDP on top of exactly this envelope.
