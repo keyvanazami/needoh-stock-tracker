@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XCHG/1 Exchange</title>
+<style>
+/* Palette: validated steps. Bid/ask is the diverging pair (blue <-> red), NOT
+   the usual green/red of trading screens -- red/green is the classic
+   deuteranopia failure, and blue<->red clears CVD separation by a wide margin.
+   Column headers say BID and ASK, so colour never carries meaning alone. */
+:root {
+  color-scheme: light;
+  --plane:        #f9f9f7;
+  --surface:      #fcfcfb;
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --muted:        #898781;
+  --grid:         #e1e0d9;
+  --rule:         #c3c2b7;
+  --border:       rgba(11,11,11,0.10);
+  --bid:          #2a78d6;
+  --ask:          #e34948;
+  --bid-wash:     rgba(42,120,214,0.14);
+  --ask-wash:     rgba(227,73,72,0.14);
+  --good:         #0ca30c;
+  --warning:      #fab219;
+  --critical:     #d03b3b;
+  --in:           #2a78d6;
+  --out:          #898781;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --rule: #383835;
+    --border: rgba(255,255,255,0.10);
+    --bid: #3987e5; --ask: #e66767;
+    --bid-wash: rgba(57,135,229,0.20); --ask-wash: rgba(230,103,103,0.20);
+    --in: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7;
+  --muted: #898781; --grid: #2c2c2a; --rule: #383835;
+  --border: rgba(255,255,255,0.10);
+  --bid: #3987e5; --ask: #e66767;
+  --bid-wash: rgba(57,135,229,0.20); --ask-wash: rgba(230,103,103,0.20);
+  --in: #3987e5;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--plane); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.num { font-variant-numeric: tabular-nums; }
+h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
+h2 { font-size: 12px; margin: 0 0 8px; color: var(--ink-2); font-weight: 600;
+     text-transform: uppercase; letter-spacing: .08em; }
+
+header {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 12px 16px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 5;
+}
+header .meta { color: var(--muted); font-size: 12px; }
+header .spacer { flex: 1; }
+button {
+  font: inherit; font-size: 12px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+button:hover { color: var(--ink); border-color: var(--ink-2); }
+button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-2);
+  background: var(--grid); }
+
+main { padding: 16px; display: grid; gap: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+       padding: 10px 12px; }
+.kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase;
+              letter-spacing: .07em; }
+.kpi .value { font-size: 22px; margin-top: 2px; }
+
+.cols { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); gap: 16px; }
+@media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
+.panel { background: var(--surface); border: 1px solid var(--border);
+         border-radius: 8px; padding: 12px; min-width: 0; }
+
+/* order books */
+.books { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 10px; }
+.book { border: 1px solid var(--grid); border-radius: 6px; padding: 8px; }
+.book .top { display: flex; justify-content: space-between; align-items: baseline;
+             margin-bottom: 6px; }
+.book .tick { font-weight: 600; letter-spacing: .03em; }
+.book .last { font-size: 12px; color: var(--ink-2); }
+.ladder { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ladder th { font-size: 10px; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .07em; font-weight: 600; text-align: right;
+             padding: 0 4px 3px; }
+.ladder th.side-b { color: var(--bid); } .ladder th.side-a { color: var(--ask); }
+.ladder td { padding: 1px 4px; text-align: right; position: relative; }
+.ladder td .bar { position: absolute; inset: 1px auto 1px 0; border-radius: 0 4px 4px 0; }
+.ladder tr.ask td .bar { background: var(--ask-wash); }
+.ladder tr.bid td .bar { background: var(--bid-wash); }
+.ladder tr.ask .px { color: var(--ask); }
+.ladder tr.bid .px { color: var(--bid); }
+.ladder td span { position: relative; }
+.ladder tr.spread td { color: var(--muted); font-size: 11px; text-align: center;
+  border-top: 1px solid var(--grid); border-bottom: 1px solid var(--grid); padding: 3px 0; }
+
+/* tables */
+table.grid { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.grid th { text-align: left; font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .07em; padding: 0 8px 4px;
+  border-bottom: 1px solid var(--rule); white-space: nowrap; }
+table.grid td { padding: 3px 8px; border-bottom: 1px solid var(--grid);
+  white-space: nowrap; }
+table.grid td.r, table.grid th.r { text-align: right; }
+table.grid tbody tr:hover { background: var(--grid); }
+.empty { color: var(--muted); font-size: 12px; padding: 10px 2px; }
+.scroll { overflow: auto; }
+.scroll-tape { max-height: 330px; }
+.scroll-log { max-height: 460px; }
+table.grid thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.warn { color: var(--critical); }
+.mm { color: var(--muted); }
+
+/* status dot: always paired with its text label, never colour alone */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+       margin-right: 6px; vertical-align: 1px; }
+.v-ok .dot { background: var(--good); }
+.v-drop .dot { background: var(--warning); }
+.v-err .dot { background: var(--critical); }
+.v-err { color: var(--critical); }
+.dir-in { color: var(--in); } .dir-out { color: var(--out); }
+
+/* packet log */
+.logbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.logbar input[type=search], .logbar select {
+  font: inherit; font-size: 12px; color: var(--ink); background: var(--plane);
+  border: 1px solid var(--rule); border-radius: 6px; padding: 4px 8px;
+}
+.logbar label { font-size: 12px; color: var(--ink-2); display: flex; gap: 5px;
+                align-items: center; }
+#logbody tr { cursor: pointer; }
+#logbody td.detail { white-space: normal; color: var(--ink-2); }
+.hexrow td { background: var(--plane); color: var(--ink-2);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px;
+  white-space: pre-wrap; word-break: break-all; }
+footer { padding: 0 16px 20px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>XCHG/1</h1>
+  <span class="meta">UDP <b id="udpport" class="num">-</b></span>
+  <span class="meta">up <b id="uptime" class="num">-</b></span>
+  <span class="meta" id="connstate">connecting...</span>
+  <span class="spacer"></span>
+  <button id="freeze" aria-pressed="false" title="Stop refreshing so you can read a row">Freeze</button>
+  <button id="theme">Light</button>
+</header>
+
+<main>
+  <section class="kpis" aria-label="Counters">
+    <div class="kpi"><div class="label">Datagrams in</div><div class="value num" id="k-rx">0</div></div>
+    <div class="kpi"><div class="label">Datagrams out</div><div class="value num" id="k-tx">0</div></div>
+    <div class="kpi"><div class="label">Rejected</div><div class="value num" id="k-bad">0</div></div>
+    <div class="kpi"><div class="label">Dropped</div><div class="value num" id="k-drop">0</div></div>
+    <div class="kpi"><div class="label">Sessions</div><div class="value num" id="k-sess">0</div></div>
+    <div class="kpi"><div class="label">Trades</div><div class="value num" id="k-trades">0</div></div>
+  </section>
+
+  <div class="cols">
+    <section class="panel">
+      <h2>Order books</h2>
+      <div class="books" id="books"></div>
+    </section>
+
+    <div style="display:grid; gap:16px; min-width:0;">
+      <section class="panel">
+        <h2>Sessions</h2>
+        <table class="grid">
+          <thead><tr>
+            <th>Team</th><th class="r">Sess</th><th>Peer</th>
+            <th class="r">In</th><th class="r">Out</th>
+            <th class="r" title="Missing client sequence numbers">Gaps</th>
+            <th class="r" title="Repeated client sequence numbers">Dups</th>
+            <th class="r" title="Sequence numbers that arrived late">Late</th>
+            <th class="r">Resting</th><th class="r">Idle</th>
+          </tr></thead>
+          <tbody id="sessions"></tbody>
+        </table>
+        <div class="empty" id="sessions-empty">No sessions. Send a HELLO datagram to begin.</div>
+      </section>
+
+      <section class="panel">
+        <h2>Trades</h2>
+        <div class="scroll scroll-tape">
+        <table class="grid">
+          <thead><tr>
+            <th class="r">Ago</th><th>Symbol</th><th class="r">Price</th>
+            <th class="r">Qty</th><th>Aggressor</th><th>Buyer / Seller</th>
+          </tr></thead>
+          <tbody id="trades"></tbody>
+        </table>
+        </div>
+        <div class="empty" id="trades-empty">No trades yet.</div>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Packet log</h2>
+    <div class="logbar">
+      <input type="search" id="q" placeholder="filter: team, type, hex, reason..." size="28">
+      <select id="dir">
+        <option value="">both directions</option>
+        <option value="in">inbound only</option>
+        <option value="out">outbound only</option>
+      </select>
+      <label><input type="checkbox" id="errsonly"> problems only</label>
+      <span class="meta mm" id="logcount"></span>
+      <span class="spacer"></span>
+      <span class="meta mm">click a row for its bytes</span>
+    </div>
+    <div class="scroll scroll-log">
+    <table class="grid">
+      <thead><tr>
+        <th class="r">Ago</th><th>Dir</th><th>Type</th>
+        <th class="r">Sess</th><th class="r">Seq</th><th class="r">Bytes</th>
+        <th>Verdict</th><th>Detail</th>
+      </tr></thead>
+      <tbody id="logbody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="log-empty">Nothing received yet.</div>
+  </section>
+</main>
+
+<footer>
+  COM2512 Phase 1 test server. Bid is <b style="color:var(--bid)">blue</b>,
+  ask is <b style="color:var(--ask)">red</b> &mdash; columns are labelled, so the
+  colour is a convenience, not the signal.
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let frozen = false, open = new Set(), lastState = null;
+
+/* theme: shipped dark, toggle persists, both scopes handled in CSS */
+const root = document.documentElement;
+try {
+  const saved = localStorage.getItem("xchg-theme");
+  if (saved) root.setAttribute("data-theme", saved);
+} catch (e) {}
+function syncThemeButton() {
+  $("theme").textContent = root.getAttribute("data-theme") === "light" ? "Dark" : "Light";
+}
+$("theme").onclick = () => {
+  const next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+  root.setAttribute("data-theme", next);
+  try { localStorage.setItem("xchg-theme", next); } catch (e) {}
+  syncThemeButton();
+};
+syncThemeButton();
+
+$("freeze").onclick = () => {
+  frozen = !frozen;
+  $("freeze").setAttribute("aria-pressed", String(frozen));
+  $("freeze").textContent = frozen ? "Resume" : "Freeze";
+  if (!frozen && lastState) render(lastState);
+};
+for (const id of ["q", "dir", "errsonly"])
+  $(id).addEventListener("input", () => lastState && render(lastState));
+
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ms = v => v < 1000 ? v + "ms" : v < 60000 ? (v / 1000).toFixed(1) + "s"
+  : Math.floor(v / 60000) + "m" + String(Math.floor(v % 60000 / 1000)).padStart(2, "0");
+const money = c => (c / 100).toFixed(2);
+const sessName = id => id === 65535 ? "MM"
+  : (lastState?.sessions.find(s => s.id === id)?.team ?? ("s" + id));
+
+function verdictClass(v) {
+  if (v === "ok") return "v-ok";
+  if (v.startsWith("dropped")) return "v-drop";
+  return "v-err";
+}
+
+function renderBooks(syms) {
+  $("books").innerHTML = syms.map(s => {
+    const maxQty = Math.max(1, ...s.bids.map(l => l[1]), ...s.asks.map(l => l[1]));
+    const row = (lvl, cls) => {
+      const w = (lvl[1] / maxQty * 100).toFixed(1);
+      return `<tr class="${cls}">
+        <td class="px num"><div class="bar" style="width:${w}%"></div><span>${money(lvl[0])}</span></td>
+        <td class="num"><span>${lvl[1]}</span></td></tr>`;
+    };
+    const asks = s.asks.slice().reverse().map(l => row(l, "ask")).join("");
+    const bids = s.bids.map(l => row(l, "bid")).join("");
+    const spread = (s.bid && s.ask) ? money(s.ask - s.bid) : "--";
+    return `<div class="book">
+      <div class="top"><span class="tick">${esc(s.ticker)}</span>
+        <span class="last num">${s.last ? "last " + money(s.last) : "no trades"}</span></div>
+      <table class="ladder">
+        <thead><tr><th class="side-a">Ask</th><th class="side-a">Qty</th></tr></thead>
+        <tbody>${asks || '<tr class="ask"><td colspan="2" class="mm">no asks</td></tr>'}</tbody>
+        <tbody><tr class="spread"><td colspan="2">spread ${spread}</td></tr></tbody>
+        <tbody>${bids || '<tr class="bid"><td colspan="2" class="mm">no bids</td></tr>'}</tbody>
+        <tfoot><tr><th class="side-b">Bid</th><th class="side-b">Qty</th></tr></tfoot>
+      </table></div>`;
+  }).join("");
+}
+
+function renderSessions(ss, ttlMs) {
+  $("sessions-empty").style.display = ss.length ? "none" : "";
+  $("sessions").innerHTML = ss.map(s => {
+    const stale = s.idleMs > ttlMs * 0.6;
+    return `<tr>
+      <td>${esc(s.team)}</td><td class="r num">${s.id}</td><td>${esc(s.peer)}</td>
+      <td class="r num">${s.rx}</td><td class="r num">${s.tx}</td>
+      <td class="r num ${s.gaps ? "warn" : ""}">${s.gaps}</td>
+      <td class="r num ${s.dups ? "warn" : ""}">${s.dups}</td>
+      <td class="r num ${s.ooo ? "warn" : ""}">${s.ooo}</td>
+      <td class="r num">${s.resting}</td>
+      <td class="r num ${stale ? "warn" : ""}">${ms(s.idleMs)}</td></tr>`;
+  }).join("");
+}
+
+function renderTrades(ts) {
+  $("trades-empty").style.display = ts.length ? "none" : "";
+  $("trades").innerHTML = ts.map(t => `<tr>
+    <td class="r num mm">${ms(t.agoMs)}</td><td>${esc(t.sym)}</td>
+    <td class="r num">${money(t.px)}</td><td class="r num">${t.qty}</td>
+    <td style="color:var(--${t.aggr === "BUY" ? "bid" : "ask"})">${t.aggr}</td>
+    <td class="mm">${esc(sessName(t.buySession))} / ${esc(sessName(t.sellSession))}</td>
+  </tr>`).join("");
+}
+
+function renderLog(log) {
+  const q = $("q").value.trim().toLowerCase();
+  const dir = $("dir").value;
+  const errs = $("errsonly").checked;
+  const rows = log.filter(e => {
+    if (dir === "in" && !e.in) return false;
+    if (dir === "out" && e.in) return false;
+    if (errs && e.verdict === "ok") return false;
+    if (!q) return true;
+    return (e.type + " " + e.peer + " " + e.verdict + " " + e.detail + " " + e.hex)
+      .toLowerCase().includes(q);
+  });
+  $("logcount").textContent = rows.length + " of " + log.length + " shown";
+  $("log-empty").style.display = log.length ? "none" : "";
+  $("logbody").innerHTML = rows.map((e, i) => {
+    const key = e.agoMs + "|" + e.type + "|" + e.seq + "|" + e.peer;
+    const vc = verdictClass(e.verdict);
+    const main = `<tr data-key="${esc(key)}">
+      <td class="r num mm">${ms(e.agoMs)}</td>
+      <td class="${e.in ? "dir-in" : "dir-out"}">${e.in ? "in &larr;" : "out &rarr;"}</td>
+      <td>${esc(e.type)}</td>
+      <td class="r num">${e.session}</td><td class="r num">${e.seq}</td>
+      <td class="r num">${e.bytes}</td>
+      <td class="${vc}"><span class="dot"></span>${esc(e.verdict)}</td>
+      <td class="detail">${esc(e.detail)}</td></tr>`;
+    if (!open.has(key)) return main;
+    return main + `<tr class="hexrow"><td colspan="8">${esc(e.peer)}
+      ${e.hex ? "\n" + esc(e.hex) : "\n(no bytes)"}</td></tr>`;
+  }).join("");
+  for (const tr of $("logbody").querySelectorAll("tr[data-key]")) {
+    tr.onclick = () => {
+      const k = tr.getAttribute("data-key");
+      open.has(k) ? open.delete(k) : open.add(k);
+      if (open.size > 40) open = new Set([...open].slice(-40));
+      lastState && renderLog(lastState.log);
+    };
+  }
+}
+
+function render(st) {
+  $("udpport").textContent = st.server.udpPort;
+  $("uptime").textContent = ms(st.server.uptimeMs);
+  $("k-rx").textContent = st.totals.rx;
+  $("k-tx").textContent = st.totals.tx;
+  $("k-bad").textContent = st.totals.bad;
+  $("k-drop").textContent = st.totals.dropped;
+  $("k-sess").textContent = st.sessions.length;
+  $("k-trades").textContent = st.trades.length ? st.trades[0].id : 0;
+  renderBooks(st.symbols);
+  renderSessions(st.sessions, st.server.ttlMs);
+  renderTrades(st.trades);
+  renderLog(st.log);
+}
+
+async function poll() {
+  if (!frozen && !document.hidden) {
+    try {
+      const r = await fetch("/api/state", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      lastState = await r.json();
+      $("connstate").textContent = "";
+      render(lastState);
+    } catch (e) {
+      $("connstate").innerHTML = '<span class="warn">server unreachable</span>';
+    }
+  }
+  setTimeout(poll, 500);
+}
+poll();
+</script>
+</body>
+</html>

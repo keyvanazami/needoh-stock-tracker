@@ -1,0 +1,4 @@
+# Build output. The instructor builds locally and ships dist/xchg-server.jar;
+# the binary is deliberately not committed.
+build/
+dist/
