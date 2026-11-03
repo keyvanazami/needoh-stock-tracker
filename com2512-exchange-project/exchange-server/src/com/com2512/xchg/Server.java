@@ -31,6 +31,8 @@ public final class Server {
     public static final int HEARTBEAT_MS = 5000;
     public static final int SESSION_TTL_MS = 15000;
     public static final int RATE_LIMIT_PER_SEC = 200;
+    /** How many client order ids a session is remembered by. */
+    public static final int DEDUP_WINDOW = 512;
 
     public static final class Session {
         public final int id;
@@ -53,6 +55,20 @@ public final class Server {
         /** Server's own outbound seq, so the student can detect loss inbound. */
         final AtomicInteger txSeq = new AtomicInteger(0);
         public final Set<Integer> subscriptions = java.util.Collections.synchronizedSet(new HashSet<>());
+        /**
+         * clOrdId -> the ACK we already sent for it. A retry carrying an id we
+         * have seen is answered with the SAME ACK and never reaches the book,
+         * which is what makes resending an order safe. Bounded, so an id that
+         * falls out of the window is treated as new again -- see the spec.
+         */
+        final java.util.LinkedHashMap<Long, byte[]> seenOrders =
+                new java.util.LinkedHashMap<>(16, 0.75f, false) {
+                    @Override protected boolean removeEldestEntry(
+                            java.util.Map.Entry<Long, byte[]> e) {
+                        return size() > DEDUP_WINDOW;
+                    }
+                };
+        public final AtomicLong deduped = new AtomicLong();
         volatile long rateWindowStart = System.currentTimeMillis();
         final AtomicInteger rateCount = new AtomicInteger();
 
@@ -84,6 +100,8 @@ public final class Server {
     }
 
     public final Exchange exchange;
+    /** --no-dedup turns idempotency off, to demonstrate what it was doing. */
+    public boolean dedup = true;
     public final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final ArrayDeque<LogEntry> log = new ArrayDeque<>();
     private final int logCap;
@@ -94,6 +112,27 @@ public final class Server {
     public final Link link;
     private final boolean verbose;
     private final ScheduledExecutorService timers = Executors.newScheduledThreadPool(2);
+
+    private java.io.PrintWriter journal;
+
+    /** Append orders and trades to a CSV, keyed by session. Nothing persists
+     *  in the exchange itself; this is purely a record for marking. */
+    public void openJournal(String path) {
+        try {
+            journal = new java.io.PrintWriter(new java.io.FileWriter(path, true), true);
+            journal.println("# ts,kind,session,team,symbol,side,price,qty,status,orderId,clOrdId");
+        } catch (Exception e) {
+            System.err.println("could not open journal " + path + ": " + e);
+        }
+    }
+
+    private void journal(String kind, int session, String team, String sym, String side,
+                         int price, int qty, String status, long orderId, long clOrdId) {
+        if (journal == null) return;
+        journal.printf("%d,%s,%d,%s,%s,%s,%d,%d,%s,%d,%d%n",
+                System.currentTimeMillis(), kind, session, team, sym, side,
+                price, qty, status, orderId, clOrdId);
+    }
 
     public final AtomicLong totalRx = new AtomicLong();
     public final AtomicLong totalTx = new AtomicLong();
@@ -211,10 +250,9 @@ public final class Server {
 
             Session s = sessions.get(key);
             if (s == null) {
-                s = new Session(nextSession.getAndIncrement() & 0xFFFE, team, addr, port);
-                if (s.id == 0 || s.id == Exchange.MM_SESSION)
-                    s = new Session(nextSession.getAndIncrement() & 0xFFFE, team, addr, port);
+                s = new Session(allocSessionId(), team, addr, port);
                 sessions.put(key, s);
+                exchange.openAccount(s.id);     // phase 2: seed cash and stock
             } else {
                 s.team = team;              // re-HELLO keeps the session id
             }
@@ -225,6 +263,7 @@ public final class Server {
             addLog(inEntry(lo, peer, "HELLO", p.session, p.seq, len, "ok",
                     "team=\"" + team + "\" -> session " + s.id, hex));
             sendWelcome(s);
+            sendAccount(s);
             publishQuote(s, 0);
             return;
         }
@@ -270,6 +309,7 @@ public final class Server {
                 addLog(inEntry(lo, peer, "BYE", p.session, p.seq, len, "ok",
                         "session " + s.id + " closed, resting orders cancelled", hex));
                 exchange.cancelAllFor(s.id);
+                exchange.closeAccount(s.id);
                 sessions.remove(s.key());
                 break;
             default:
@@ -279,6 +319,21 @@ public final class Server {
                 send(s, Packet.T_ERROR, Packet.errorPayload(Packet.E_TYPE, p.seq,
                         "unexpected type " + Packet.typeName(p.type)));
         }
+    }
+
+    /**
+     * Next free session id. Must be unique: two traders sharing an id would
+     * share an account and an order book identity. 0 means "no session yet"
+     * and 0xFFFF is the market maker, so both are skipped.
+     */
+    private int allocSessionId() {
+        for (int tries = 0; tries < 0x10000; tries++) {
+            int id = nextSession.getAndIncrement() & 0xFFFF;
+            if (id == 0 || id == Exchange.MM_SESSION) continue;
+            final int candidate = id;
+            if (sessions.values().stream().noneMatch(x -> x.id == candidate)) return id;
+        }
+        throw new IllegalStateException("no free session ids");
     }
 
     /** Track gaps, duplicates and reordering in the client's seq stream. */
@@ -309,6 +364,21 @@ public final class Server {
         int price = Packet.getU16(p.payload, 7);
         int qty = Packet.getU16(p.payload, 9);
 
+        // Idempotency. An order id we have already answered is a retry, not a
+        // new order: replay the original ACK byte for byte and leave the book
+        // alone. The reply is identical on purpose -- a client that gets the
+        // same orderId back knows it was recognised rather than re-executed.
+        byte[] prior = null;
+        if (dedup) synchronized (s.seenOrders) { prior = s.seenOrders.get(clOrdId); }
+        if (prior != null) {
+            s.deduped.incrementAndGet();
+            addLog(inEntry(lo, peer, "ORDER", p.session, p.seq, len, "deduped",
+                    "clOrdId=" + clOrdId + " already booked; replaying the original ACK",
+                    hex));
+            send(s, Packet.T_ACK, prior);
+            return;
+        }
+
         Exchange.Result r = exchange.submit(s.id, clOrdId, sym, side, price, qty);
         s.orders.incrementAndGet();
         if (r.status == Packet.ST_REJECTED) s.rejected.incrementAndGet();
@@ -323,10 +393,30 @@ public final class Server {
                 r.filledQty, r.restQty);
         addLog(inEntry(lo, peer, "ORDER", p.session, p.seq, len, "ok", detail, hex));
 
-        send(s, Packet.T_ACK, Packet.ackPayload(clOrdId, r.orderId, r.status, r.reason,
-                r.filledQty, r.restQty));
+        journal("order", s.id, s.team, sy == null ? String.valueOf(sym) : sy.ticker,
+                side == Packet.SIDE_BUY ? "BUY" : "SELL", price, qty,
+                Packet.statusName(r.status), r.orderId, clOrdId);
+        for (Exchange.Trade t : r.trades) {
+            Exchange.Symbol ts = exchange.symbol(t.symbol);
+            journal("trade", s.id, s.team, ts == null ? "?" : ts.ticker,
+                    t.aggressorSide == Packet.SIDE_BUY ? "BUY" : "SELL",
+                    t.price, t.qty, "FILL", t.id, clOrdId);
+        }
+        byte[] ack = Packet.ackPayload(clOrdId, r.orderId, r.status, r.reason,
+                r.filledQty, r.restQty);
+        if (dedup) synchronized (s.seenOrders) { s.seenOrders.put(clOrdId, ack); }
+        send(s, Packet.T_ACK, ack);
+        // Reserving, filling and rejecting all move the balances, so refresh them.
+        sendAccount(s);
         fanOutTrades(r.trades);
-        if (!r.trades.isEmpty() || r.restQty > 0) publishQuoteAll(sym);
+        sendAccountsFor(r.trades);
+        // No QUOTE here on purpose. Market data is a steady periodic feed
+        // published by the maker tick, NOT a reaction to each book change.
+        // Otherwise the quote rate depends on how much you trade, a busy
+        // client's N-sample average spans a shorter period of TIME than a
+        // quiet one's, and the client that reads less of the feed ends up with
+        // the better view. Measured: with per-trade quotes, a client dropping
+        // 60% of its market data beat an attentive one on all five seeds.
     }
 
     private void onCancel(Session s, Packet p, String peer, int len, String hex,
@@ -349,7 +439,7 @@ public final class Server {
                 hex));
         send(s, Packet.T_ACK, Packet.ackPayload(clOrdId, orderId, r.status, r.reason,
                 r.filledQty, r.restQty));
-        for (Exchange.Symbol sy : exchange.symbols()) publishQuoteAll(sy.id);
+        sendAccount(s);                      // a cancel releases its reservation
     }
 
     private void onSubscribe(Session s, Packet p, String peer, int len, String hex,
@@ -409,6 +499,38 @@ public final class Server {
             off += 6;
         }
         send(s, Packet.T_WELCOME, pay);
+    }
+
+    /**
+     * Push the authoritative cash and holdings. Sent on connect and whenever
+     * they could have changed, so a client can reconcile its own accounting
+     * against the exchange's and notice when the two have drifted apart.
+     */
+    private void sendAccount(Session s) {
+        Account a = exchange.account(s.id);
+        if (a == null) return;
+        List<Exchange.Symbol> syms = exchange.symbols();
+        byte[] pay = new byte[9 + syms.size() * 10];
+        Packet.putU32(pay, 0, a.cash());
+        Packet.putU32(pay, 4, a.reserved());
+        pay[8] = (byte) syms.size();
+        int off = 9;
+        for (Exchange.Symbol sy : syms) {
+            Packet.putU16(pay, off, sy.id);
+            Packet.putU32(pay, off + 2, a.free(sy.id));
+            Packet.putU32(pay, off + 6, a.onSale(sy.id));
+            off += 10;
+        }
+        send(s, Packet.T_ACCOUNT, pay);
+    }
+
+    /** Push ACCOUNT to whichever live sessions these trades touched. */
+    private void sendAccountsFor(List<Exchange.Trade> trades) {
+        if (trades.isEmpty()) return;
+        java.util.Set<Integer> touched = new HashSet<>();
+        for (Exchange.Trade t : trades) { touched.add(t.buySession); touched.add(t.sellSession); }
+        for (Session s : sessions.values())
+            if (touched.contains(s.id)) sendAccount(s);
     }
 
     private void publishQuote(Session s, int sym) {
@@ -512,6 +634,23 @@ public final class Server {
                     return Packet.errorName(p[0] & 0xFF) + ": "
                             + new String(p, 4, Math.min(n, p.length - 4), StandardCharsets.US_ASCII);
                 }
+                case Packet.T_ACCOUNT: {
+                    StringBuilder b = new StringBuilder();
+                    b.append("cash ").append(Packet.getU32(p, 0));
+                    long res = Packet.getU32(p, 4);
+                    if (res > 0) b.append(" (+").append(res).append(" reserved)");
+                    int cnt = p[8] & 0xFF;
+                    for (int i = 0; i < cnt; i++) {
+                        int o = 9 + i * 10;
+                        Exchange.Symbol sy = exchange.symbol(Packet.getU16(p, o));
+                        long free = Packet.getU32(p, o + 2), sale = Packet.getU32(p, o + 6);
+                        if (free + sale == 0) continue;
+                        b.append("  ").append(sy == null ? "?" : sy.ticker)
+                         .append(' ').append(free + sale);
+                        if (sale > 0) b.append(" (").append(sale).append(" on sale)");
+                    }
+                    return b.toString();
+                }
                 case Packet.T_PONG:
                     return "echo=" + Packet.hex(p);
                 default:
@@ -528,6 +667,7 @@ public final class Server {
         try {
             List<Exchange.Trade> trades = exchange.marketMakerTick();
             fanOutTrades(trades);
+            sendAccountsFor(trades);
             for (Exchange.Symbol sy : exchange.symbols()) publishQuoteAll(sy.id);
         } catch (Exception e) {
             System.err.println("market maker tick failed: " + e);
@@ -539,6 +679,7 @@ public final class Server {
         for (Session s : new ArrayList<>(sessions.values())) {
             if (now - s.lastSeenMs > SESSION_TTL_MS) {
                 exchange.cancelAllFor(s.id);
+                exchange.closeAccount(s.id);
                 sessions.remove(s.key());
                 addLog(new LogEntry(false, s.key(), "-", s.id, 0, 0, "session expired",
                         "silent for more than " + SESSION_TTL_MS
@@ -577,6 +718,7 @@ public final class Server {
     }
 
     public void close() {
+        if (journal != null) journal.close();
         timers.shutdownNow();
         link.close();
         socket.close();

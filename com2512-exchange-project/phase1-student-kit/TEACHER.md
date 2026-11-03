@@ -13,14 +13,14 @@ implement XCHG/1 from the spec in whatever language they like.
 |---|---|
 | `xchg-server.jar` | the server source |
 | `PROTOCOL.md` — the wire spec | any client, in any language |
-| `README.md` — the handout | `TEACHER.md`, `server/` |
+| `README.md` — the handout | `TEACHER.md`, `../exchange-server/` |
 
 Students need a JRE 17+ and nothing else.
 
 ## Run it yourself first
 
 ```bash
-java -jar server/dist/xchg-server.jar
+java -jar ../exchange-server/dist/xchg-server.jar
 ```
 
 UDP on 9001, UI on <http://localhost:9000/>. A built-in market maker is already
@@ -29,15 +29,15 @@ quoting, so the book is live with nobody connected.
 Worth two minutes before the lab:
 
 ```bash
-java -jar server/dist/xchg-server.jar --vectors      # what students must reproduce
-java -jar server/dist/xchg-server.jar --decode "58 43 01 40 00 00 00 01 00 04 03 61 64 61 C0 15"
-java -jar server/dist/xchg-server.jar --link list    # the network conditions
+java -jar ../exchange-server/dist/xchg-server.jar --vectors      # what students must reproduce
+java -jar ../exchange-server/dist/xchg-server.jar --decode "58 43 01 40 00 00 00 01 00 04 03 61 64 61 C0 15"
+java -jar ../exchange-server/dist/xchg-server.jar --link list    # the network conditions
 ```
 
 ## Rebuild
 
 ```bash
-cd server && ./build.sh      # -> dist/xchg-server.jar, then self-tests the CRC
+cd ../exchange-server && ./build.sh      # -> dist/xchg-server.jar, then self-tests the CRC
 ```
 
 JDK 17+ and nothing else — no Maven, no Gradle, no network, no third-party jars.
@@ -48,7 +48,7 @@ Re-zip the student bundle after a rebuild:
 
 ```bash
 rm -rf out && mkdir -p out/phase1-student-kit
-cp PROTOCOL.md README.md server/dist/xchg-server.jar out/phase1-student-kit/
+cp PROTOCOL.md README.md ../exchange-server/dist/xchg-server.jar out/phase1-student-kit/
 cd out && zip -r ../student-kit.zip phase1-student-kit
 ```
 
@@ -60,7 +60,7 @@ Rate limiting (200 pkt/s/session) and a 64-order resting cap stop one runaway
 loop spoiling it.
 
 ```bash
-java -jar server/dist/xchg-server.jar --udp-port 9001 --web-port 9000
+java -jar ../exchange-server/dist/xchg-server.jar --udp-port 9001 --web-port 9000
 ```
 
 Put the UI on a projector. The packet log answers most questions before they are
@@ -70,7 +70,7 @@ so "it doesn't work" becomes self-service.
 Later in the lab, once clients work, turn the network bad:
 
 ```bash
-java -jar server/dist/xchg-server.jar --link flaky-acks
+java -jar ../exchange-server/dist/xchg-server.jar --link flaky-acks
 ```
 
 Orders execute but their ACKs mostly do not arrive. Students discover they
@@ -90,11 +90,11 @@ conditions.
 | `PROTOCOL.md` | the wire spec students implement |
 | `README.md` | the student handout |
 | `student-kit.zip` | the distributable bundle |
-| `server/README.md` | **the detail**: Link, profiles, every flag, how to extend |
-| `server/src/` | Java source, six classes |
-| `server/resources/ui/index.html` | the exchange UI |
+| `../exchange-server/README.md` | **the detail**: Link, profiles, every flag, how to extend |
+| `../exchange-server/src/` | Java source |
+| `../exchange-server/resources/ui/index.html` | the exchange UI |
 
-Read `server/README.md` next — it covers the link emulator and how to add new
+Read `../exchange-server/README.md` next — it covers the link emulator and how to add new
 network conditions.
 
 ## Two things to know before you change anything

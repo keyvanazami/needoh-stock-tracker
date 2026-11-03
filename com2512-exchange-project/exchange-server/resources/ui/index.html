@@ -24,6 +24,8 @@
   --bid-wash:     rgba(42,120,214,0.14);
   --ask-wash:     rgba(227,73,72,0.14);
   --good:         #0ca30c;
+  --up:           #006300;
+  --down:         #d03b3b;
   --warning:      #fab219;
   --critical:     #d03b3b;
   --in:           #2a78d6;
@@ -37,7 +39,7 @@
     --border: rgba(255,255,255,0.10);
     --bid: #3987e5; --ask: #e66767;
     --bid-wash: rgba(57,135,229,0.20); --ask-wash: rgba(230,103,103,0.20);
-    --in: #3987e5;
+    --in: #3987e5; --up: #0ca30c; --down: #e66767;
   }
 }
 :root[data-theme="dark"] {
@@ -47,7 +49,7 @@
   --border: rgba(255,255,255,0.10);
   --bid: #3987e5; --ask: #e66767;
   --bid-wash: rgba(57,135,229,0.20); --ask-wash: rgba(230,103,103,0.20);
-  --in: #3987e5;
+  --in: #3987e5; --up: #0ca30c; --down: #e66767;
 }
 
 * { box-sizing: border-box; }
@@ -127,6 +129,10 @@ table.grid tbody tr:hover { background: var(--grid); }
 .scroll-log { max-height: 460px; }
 table.grid thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 .warn { color: var(--critical); }
+.up { color: var(--up); }
+.down { color: var(--down); }
+.pnl { font-weight: 600; }
+.hold { color: var(--ink-2); }
 .mm { color: var(--muted); }
 
 /* status dot: always paired with its text label, never colour alone */
@@ -198,6 +204,25 @@ footer { padding: 0 16px 20px; color: var(--muted); font-size: 11px; }
     <div class="kpi"><div class="label">Trades</div><div class="value num" id="k-trades">0</div></div>
   </section>
 
+  <section class="panel">
+    <h2>Traders</h2>
+    <table class="grid">
+      <thead><tr>
+        <th>Team</th><th class="r">Sess</th>
+        <th class="r">P&amp;L</th><th class="r">Value</th><th class="r">Cash</th>
+        <th>Holdings</th>
+        <th class="r" title="Retries the exchange recognised by clOrdId">Deduped</th>
+        <th class="r" title="Orders the exchange refused">Rejects</th>
+        <th class="r" title="Refused for want of cash or stock">Funds</th>
+        <th class="r" title="Missing client sequence numbers">Gaps</th>
+        <th class="r" title="Repeated client sequence numbers">Dups</th>
+        <th class="r">Resting</th><th class="r">Idle</th>
+      </tr></thead>
+      <tbody id="traders"></tbody>
+    </table>
+    <div class="empty" id="traders-empty">No traders connected. Send a HELLO datagram to begin.</div>
+  </section>
+
   <div class="cols">
     <section class="panel">
       <h2>Order books</h2>
@@ -205,22 +230,6 @@ footer { padding: 0 16px 20px; color: var(--muted); font-size: 11px; }
     </section>
 
     <div style="display:grid; gap:16px; min-width:0;">
-      <section class="panel">
-        <h2>Sessions</h2>
-        <table class="grid">
-          <thead><tr>
-            <th>Team</th><th class="r">Sess</th><th>Peer</th>
-            <th class="r">In</th><th class="r">Out</th>
-            <th class="r" title="Missing client sequence numbers">Gaps</th>
-            <th class="r" title="Repeated client sequence numbers">Dups</th>
-            <th class="r" title="Sequence numbers that arrived late">Late</th>
-            <th class="r">Resting</th><th class="r">Idle</th>
-          </tr></thead>
-          <tbody id="sessions"></tbody>
-        </table>
-        <div class="empty" id="sessions-empty">No sessions. Send a HELLO datagram to begin.</div>
-      </section>
-
       <section class="panel">
         <h2>Trades</h2>
         <div class="scroll scroll-tape">
@@ -305,7 +314,6 @@ const esc = s => String(s).replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ms = v => v < 1000 ? v + "ms" : v < 60000 ? (v / 1000).toFixed(1) + "s"
   : Math.floor(v / 60000) + "m" + String(Math.floor(v % 60000 / 1000)).padStart(2, "0");
-const money = c => (c / 100).toFixed(2);
 const sessName = id => id === 65535 ? "MM"
   : (lastState?.sessions.find(s => s.id === id)?.team ?? ("s" + id));
 
@@ -342,16 +350,35 @@ function renderBooks(syms) {
   }).join("");
 }
 
-function renderSessions(ss, ttlMs) {
-  $("sessions-empty").style.display = ss.length ? "none" : "";
-  $("sessions").innerHTML = ss.map(s => {
+function money(c) { return (c / 100).toFixed(2); }
+
+function signed(c) {
+  const v = (c / 100).toFixed(2);
+  return c > 0 ? "+" + v : v;          // sign always present, never colour alone
+}
+
+function renderTraders(ss, ttlMs) {
+  $("traders-empty").style.display = ss.length ? "none" : "";
+  // Leaderboard order, but only once there is money to rank by.
+  const rows = ss.slice().sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0));
+  $("traders").innerHTML = rows.map(s => {
     const stale = s.idleMs > ttlMs * 0.6;
+    const hasAcct = s.cash !== undefined;
+    const hold = hasAcct ? Object.entries(s.pos)
+      .map(([t, q]) => `${t} ${q}`).join("  ") : "";
+    const pnlCls = !hasAcct ? "" : s.pnl > 0 ? "up" : s.pnl < 0 ? "down" : "";
     return `<tr>
-      <td>${esc(s.team)}</td><td class="r num">${s.id}</td><td>${esc(s.peer)}</td>
-      <td class="r num">${s.rx}</td><td class="r num">${s.tx}</td>
+      <td>${esc(s.team)}</td><td class="r num mm">${s.id}</td>
+      <td class="r num pnl ${pnlCls}">${hasAcct ? signed(s.pnl) : "-"}</td>
+      <td class="r num">${hasAcct ? money(s.mtm) : "-"}</td>
+      <td class="r num">${hasAcct ? money(s.cash) : "-"}</td>
+      <td class="hold num">${esc(hold)}</td>
+      <td class="r num">${s.deduped ?? 0}</td>
+      <td class="r num ${s.rejected ? "warn" : ""}">${s.rejected}</td>
+      <td class="r num ${hasAcct && (s.rejFunds + s.rejStock) ? "warn" : ""}">${
+        hasAcct ? s.rejFunds + s.rejStock : "-"}</td>
       <td class="r num ${s.gaps ? "warn" : ""}">${s.gaps}</td>
       <td class="r num ${s.dups ? "warn" : ""}">${s.dups}</td>
-      <td class="r num ${s.ooo ? "warn" : ""}">${s.ooo}</td>
       <td class="r num">${s.resting}</td>
       <td class="r num ${stale ? "warn" : ""}">${ms(s.idleMs)}</td></tr>`;
   }).join("");
@@ -434,7 +461,7 @@ function render(st) {
   $("k-sess").textContent = st.sessions.length;
   $("k-trades").textContent = st.trades.length ? st.trades[0].id : 0;
   renderBooks(st.symbols);
-  renderSessions(st.sessions, st.server.ttlMs);
+  renderTraders(st.sessions, st.server.ttlMs);
   renderTrades(st.trades);
   renderLog(st.log);
 }

@@ -130,12 +130,16 @@ public final class WebUi {
              .append('}');
         }
 
-        b.append("],\"sessions\":[");
+        b.append("],\"startingValue\":").append(ex.startingValue())
+         .append(",\"sessions\":[");
+        java.util.Map<Integer, Integer> marks = ex.marks();
+        long startValue = ex.startingValue();
         first = true;
         for (Server.Session s : server.sessionList()) {
             if (!first) b.append(',');
             first = false;
             String subs = s.subscriptions.contains(0) ? "all" : s.subscriptions.toString();
+            Account acct = ex.account(s.id);
             b.append("{\"id\":").append(s.id)
              .append(",\"team\":\"").append(esc(s.team)).append('"')
              .append(",\"peer\":\"").append(esc(s.key())).append('"')
@@ -147,12 +151,34 @@ public final class WebUi {
              .append(",\"orders\":").append(s.orders.get())
              .append(",\"fills\":").append(s.fills.get())
              .append(",\"rejected\":").append(s.rejected.get())
+             .append(",\"deduped\":").append(s.deduped.get())
              .append(",\"resting\":").append(ex.restingCount(s.id))
              .append(",\"highestSeq\":").append(s.highestSeq)
              .append(",\"idleMs\":").append(now - s.lastSeenMs)
              .append(",\"ageMs\":").append(now - s.firstSeenMs)
-             .append(",\"subs\":\"").append(esc(subs)).append('"')
-             .append('}');
+             .append(",\"subs\":\"").append(esc(subs)).append('"');
+            if (acct != null) {
+                b.append(",\"cash\":").append(acct.cash())
+                 .append(",\"reserved\":").append(acct.reserved())
+                 .append(",\"mtm\":").append(acct.markToMarket(marks))
+                 .append(",\"pnl\":").append(acct.pnl(marks, startValue))
+                 .append(",\"bought\":").append(acct.bought)
+                 .append(",\"sold\":").append(acct.sold)
+                 .append(",\"rejFunds\":").append(acct.rejectedFunds)
+                 .append(",\"rejStock\":").append(acct.rejectedStock)
+                 .append(",\"pos\":{");
+                boolean f2 = true;
+                for (java.util.Map.Entry<Integer, long[]> en : acct.stockView().entrySet()) {
+                    Exchange.Symbol sy = ex.symbol(en.getKey());
+                    if (sy == null) continue;
+                    if (!f2) b.append(',');
+                    f2 = false;
+                    b.append('"').append(esc(sy.ticker)).append("\":")
+                     .append(en.getValue()[0] + en.getValue()[1]);
+                }
+                b.append('}');
+            }
+            b.append('}');
         }
 
         b.append("],\"trades\":[");

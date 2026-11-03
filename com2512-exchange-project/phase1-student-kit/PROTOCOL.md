@@ -199,7 +199,9 @@ the `PONG`, so put a timestamp there and you get an RTT for free.
 | 6 | 1 | NSYM |
 | 7 | 6 each | symbol id (2) + ticker (4 ASCII, space-padded) |
 
-**`0x10 QUOTE`** — payload 10 bytes. Top of book, sent on every change.
+**`0x10 QUOTE`** — payload 10 bytes. Top of book. It is a **steady periodic
+feed**, one per symbol per market-maker tick, not a reaction to each change in
+the book — so the rate you receive it at does not depend on how much you trade.
 
 | off | size | field |
 |---|---|---|

@@ -3,6 +3,8 @@ package com.com2512.xchg;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Random;
 import java.util.TreeMap;
@@ -23,14 +25,22 @@ public final class Exchange {
     public static final int MM_SESSION = 0xFFFF;      // the built-in market maker
     public static final int MAX_RESTING_PER_SESSION = 64;
 
+    /** The maker's price cycle. See marketMakerTick for why it is a cycle. */
+    public static final int CYCLE_TICKS = 60;      // ticks per full oscillation
+    public static final int CYCLE_AMPLITUDE = 9;   // cents either side of anchor
+
     public static final class Symbol {
         public final int id;
         public final String ticker;
         public int mid;             // market-maker reference price, in cents
+        public final int anchor;    // the level the cycle oscillates around
+        long tick;                  // ticks elapsed, drives the cycle
+        double phase;               // so the four symbols do not move together
         public int last;            // last traded price, 0 if never traded
         public long volume;         // cumulative traded quantity
         Symbol(int id, String ticker, int mid) {
-            this.id = id; this.ticker = ticker; this.mid = mid; this.last = 0;
+            this.id = id; this.ticker = ticker; this.mid = mid;
+            this.anchor = mid; this.last = 0;
         }
     }
 
@@ -104,7 +114,10 @@ public final class Exchange {
     private final TreeMap<Integer, Side> asks = new TreeMap<>();
     private final TreeMap<Long, Order> byId = new TreeMap<>();
     private final ArrayDeque<Trade> tape = new ArrayDeque<>();
+    private final Map<Integer, Account> accounts = new LinkedHashMap<>();
     private final Random rng;
+    private long startingCash = 1_000_000L;            // cents
+    private int startingShares = 200;
 
     private long nextOrderId = 1, nextTradeId = 1, arrivalSeq = 1;
     private final int mmSpread, mmSize;
@@ -120,6 +133,45 @@ public final class Exchange {
         addSymbol(2, "MSFT", 420);
         addSymbol(3, "NVDA", 880);
         addSymbol(4, "TSLA", 250);
+        // Spread the symbols around the cycle so they are not one trade.
+        int k = 0;
+        for (Symbol s : symbols.values()) s.phase = (Math.PI / 2) * (k++);
+    }
+
+    public synchronized void setStartingBalances(long cash, int shares) {
+        this.startingCash = cash;
+        this.startingShares = shares;
+    }
+
+    public synchronized long startingCash() { return startingCash; }
+    public synchronized int startingShares() { return startingShares; }
+
+    /** Seed a trader on connect. The market maker trades without an account. */
+    public synchronized Account openAccount(int session) {
+        Map<Integer, Integer> seed = new LinkedHashMap<>();
+        for (Symbol s : symbols.values()) seed.put(s.id, startingShares);
+        Account a = new Account(session, startingCash, seed);
+        accounts.put(session, a);
+        return a;
+    }
+
+    public synchronized Account account(int session) { return accounts.get(session); }
+    public synchronized void closeAccount(int session) { accounts.remove(session); }
+    public synchronized Map<Integer, Account> accounts() { return new LinkedHashMap<>(accounts); }
+
+    /** Last trade price per symbol, falling back to the maker's mid. */
+    public synchronized Map<Integer, Integer> marks() {
+        Map<Integer, Integer> m = new LinkedHashMap<>();
+        for (Symbol s : symbols.values()) m.put(s.id, s.last > 0 ? s.last : s.mid);
+        return m;
+    }
+
+    /** What a fresh account is worth, so P&L starts everyone at zero. */
+    public synchronized long startingValue() {
+        long v = startingCash;
+        for (Symbol s : symbols.values())
+            v += (long) startingShares * (s.last > 0 ? s.last : s.mid);
+        return v;
     }
 
     private void addSymbol(int id, String ticker, int mid) {
@@ -186,6 +238,22 @@ public final class Exchange {
             r.status = Packet.ST_REJECTED; r.reason = Packet.R_TOO_MANY; return r;
         }
 
+        // Reserve what the order would need, at ENTRY. A resting order that has
+        // not reserved could be unpayable by the time it fills, and one balance
+        // would silently back any number of resting orders.
+        Account acct = accounts.get(session);
+        if (session != MM_SESSION) {
+            if (acct == null) {
+                r.status = Packet.ST_REJECTED; r.reason = Packet.R_NO_ACCOUNT; return r;
+            }
+            if (side == Packet.SIDE_BUY && !acct.reserveCash(price, qty)) {
+                r.status = Packet.ST_REJECTED; r.reason = Packet.R_NO_FUNDS; return r;
+            }
+            if (side == Packet.SIDE_SELL && !acct.reserveStock(symbol, qty)) {
+                r.status = Packet.ST_REJECTED; r.reason = Packet.R_NO_STOCK; return r;
+            }
+        }
+
         Order incoming = new Order(nextOrderId++, session, clOrdId, symbol, side, price,
                                    qty, arrivalSeq++);
         byId.put(incoming.id, incoming);
@@ -221,6 +289,13 @@ public final class Exchange {
             tape.addLast(t);
             while (tape.size() > 256) tape.pollFirst();
 
+            // Settlement is immediate and atomic with the print: cash and stock
+            // move now, not at some end-of-day. Each side unwinds the reservation
+            // it made at entry, so a buy that improves on its limit gets the
+            // difference back.
+            int buyerLimit = incomingIsBuy ? price : resting.price;
+            settle(t.buySession, t.sellSession, symbol, buyerLimit, tradePx, fill);
+
             Symbol s = symbols.get(symbol);
             s.last = tradePx;
             s.volume += fill;
@@ -237,6 +312,22 @@ public final class Exchange {
             r.status = (r.filledQty > 0) ? Packet.ST_PARTIAL : Packet.ST_RESTING;
         }
         return r;
+    }
+
+    private void settle(int buySession, int sellSession, int sym, int buyerLimit,
+                        int price, int qty) {
+        Account buyer = accounts.get(buySession);
+        if (buyer != null) buyer.settleBuy(sym, buyerLimit, price, qty);
+        Account seller = accounts.get(sellSession);
+        if (seller != null) seller.settleSell(sym, price, qty);
+    }
+
+    /** Hand back whatever an order's unfilled remainder still has reserved. */
+    private void release(Order o) {
+        Account a = accounts.get(o.session);
+        if (a == null || o.remaining <= 0) return;
+        if (o.side == Packet.SIDE_BUY) a.releaseCash(o.price, o.remaining);
+        else a.releaseStock(o.symbol, o.remaining);
     }
 
     /** Cancel a resting order. Only the session that placed it may cancel it. */
@@ -256,6 +347,7 @@ public final class Exchange {
             level.remove(o);
             if (level.isEmpty()) s.levels.remove(o.price);
         }
+        release(o);
         byId.remove(orderId);
         r.status = Packet.ST_CANCELLED;
         r.restQty = 0;
@@ -275,6 +367,7 @@ public final class Exchange {
                 level.remove(o);
                 if (level.isEmpty()) s.levels.remove(o.price);
             }
+            release(o);
             byId.remove(id);
         }
     }
@@ -291,8 +384,24 @@ public final class Exchange {
         if (!mmEnabled) return trades;
         cancelAllFor(MM_SESSION);
         for (Symbol s : symbols.values()) {
-            s.mid += rng.nextInt(3) - 1;                       // -1, 0 or +1 cent
-            s.mid = Math.max(20, Math.min(60000, s.mid));
+            // A slow cycle plus noise, NOT a random walk.
+            //
+            // This is a deliberate, and openly synthetic, choice. Against a
+            // random walk the reference strategy has no edge: it pays the spread
+            // on every round trip and loses steadily, which would mean the
+            // highest-scoring client was the one that traded LEAST -- exactly the
+            // wrong incentive for an exercise about execution quality. Measured
+            // over three seeds, a client that dropped 60% of its market data
+            // actually WON two of them, because P&L was pure noise.
+            //
+            // With a real cycle to capture, the strategy has positive
+            // expectancy, the edge is comfortably larger than the spread, and
+            // catching more of the signal reliably earns more. Missing quotes
+            // now costs money, which is the whole point.
+            s.tick++;
+            double angle = 2 * Math.PI * s.tick / CYCLE_TICKS + s.phase;
+            int target = s.anchor + (int) Math.round(CYCLE_AMPLITUDE * Math.sin(angle));
+            s.mid = Math.max(20, Math.min(60000, target + rng.nextInt(3) - 1));
             int half = Math.max(1, mmSpread / 2);
             for (int i = 0; i < 3; i++) {                      // three levels each side
                 int bid = s.mid - half - i;

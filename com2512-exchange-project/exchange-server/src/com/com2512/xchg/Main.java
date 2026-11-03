@@ -20,8 +20,12 @@ public final class Main {
 
     public static void main(String[] args) throws Exception {
         int udpPort = 9001, webPort = 9000, mmInterval = 1000, logCap = 400;
-        int mmSpread = 4, mmSize = 10;
+        int mmSpread = 2, mmSize = 10;
         boolean mm = true, verbose = false, noWeb = false;
+        long cash = 1_000_000L;          // cents: 10,000.00
+        int inventory = 200;             // shares of each symbol
+        String journal = null;
+        boolean dedup = true;
 
         // Everything between the socket and the order book lives in Link.
         Link.Config link = new Link.Config();
@@ -37,6 +41,7 @@ public final class Main {
                     case "--version": System.out.println(VERSION); return;
                     case "--selftest": System.exit(selfTest() ? 0 : 1); return;
                     case "--vectors": vectors(); return;
+                    case "--algo-vectors": Strategy.printVectors(); return;
                     case "--decode": decode(args[++i]); return;
                     case "--udp-port": udpPort = Integer.parseInt(args[++i]); break;
                     case "--web-port": webPort = Integer.parseInt(args[++i]); break;
@@ -74,6 +79,11 @@ public final class Main {
                     case "--mm-interval": mmInterval = Integer.parseInt(args[++i]); break;
                     case "--mm-spread": mmSpread = Integer.parseInt(args[++i]); break;
                     case "--mm-size": mmSize = Integer.parseInt(args[++i]); break;
+                    // phase 2: what a trader is given on connect
+                    case "--cash": cash = Long.parseLong(args[++i]); break;
+                    case "--inventory": inventory = Integer.parseInt(args[++i]); break;
+                    case "--journal": journal = args[++i]; break;
+                    case "--no-dedup": dedup = false; break;
                     case "--log-size": logCap = Integer.parseInt(args[++i]); break;
                     case "--verbose": case "-v": verbose = true; break;
                     default:
@@ -115,7 +125,10 @@ public final class Main {
         }
 
         Exchange exchange = new Exchange(link.seed, mm, mmSpread, mmSize);
+        exchange.setStartingBalances(cash, inventory);
         Server server = new Server(udpPort, exchange, new Link(link), logCap, verbose);
+        server.dedup = dedup;
+        if (journal != null) server.openJournal(journal);
 
         System.out.println(VERSION);
         System.out.println("  exchange   UDP  0.0.0.0:" + udpPort);
@@ -125,6 +138,8 @@ public final class Main {
             System.out.println("  UI         http://localhost:" + webPort + "/");
         }
         System.out.printf("  symbols    %s%n", tickerList(exchange));
+        System.out.printf("  traders    start with %d.%02d cash and %d of each symbol%n",
+                cash / 100, cash % 100, inventory);
         System.out.printf("  link       %s%n", link.profile);
         System.out.printf("             %s  (seed %d)%n", link.describe(), link.seed);
         System.out.printf("  market maker %s, every %dms%n", mm ? "on" : "off", mmInterval);
@@ -487,6 +502,7 @@ public final class Main {
             modes
               --selftest            check the CRC against the course vectors, exit
               --vectors             print the XCHG/1 acceptance vectors, exit
+              --algo-vectors        print the Phase 2 strategy vectors, exit
               --decode HEX          decode one packet and explain it, exit
               --version, --help
 
@@ -517,6 +533,13 @@ public final class Main {
               --max-wait MS         drop rather than queue longer than this
 
               --seed N              RNG seed, so a run is reproducible (default 2512)
+
+            accounts (phase 2)
+              --cash N              starting cash in cents (default 1000000 = 10,000.00)
+              --inventory N         starting shares of each symbol (default 200)
+              --journal FILE        append every order and trade to a CSV, by session
+              --no-dedup            stop recognising retries by clOrdId, so a
+                                    resent order books a second time
 
             market
               --no-mm               no built-in market maker (book starts empty)

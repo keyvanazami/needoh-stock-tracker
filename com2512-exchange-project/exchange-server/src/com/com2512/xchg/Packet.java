@@ -42,6 +42,7 @@ public final class Packet {
     public static final int T_HELLO     = 0x40;
     public static final int T_WELCOME   = 0x41;
     public static final int T_BYE       = 0x42;
+    public static final int T_ACCOUNT   = 0x44;   // phase 2: cash + holdings
     public static final int T_SUBSCRIBE = 0x50;
     public static final int T_PING      = 0x60;
     public static final int T_PONG      = 0x61;
@@ -67,6 +68,9 @@ public final class Packet {
     public static final int R_TOO_MANY       = 5;
     public static final int R_UNKNOWN_ORDER  = 6;
     public static final int R_NOT_YOUR_ORDER = 7;
+    public static final int R_NO_FUNDS       = 8;   // phase 2
+    public static final int R_NO_STOCK       = 9;
+    public static final int R_NO_ACCOUNT     = 10;
 
     // ---- ERROR codes
     public static final int E_MAGIC   = 0x01;
@@ -89,6 +93,7 @@ public final class Packet {
             case T_HELLO: return "HELLO";
             case T_WELCOME: return "WELCOME";
             case T_BYE: return "BYE";
+            case T_ACCOUNT: return "ACCOUNT";
             case T_SUBSCRIBE: return "SUBSCRIBE";
             case T_PING: return "PING";
             case T_PONG: return "PONG";
@@ -133,6 +138,9 @@ public final class Packet {
             case R_TOO_MANY: return "too many resting orders";
             case R_UNKNOWN_ORDER: return "unknown order id";
             case R_NOT_YOUR_ORDER: return "not your order";
+            case R_NO_FUNDS: return "not enough cash";
+            case R_NO_STOCK: return "not enough stock to sell";
+            case R_NO_ACCOUNT: return "no account for this session";
             default: return String.valueOf(r);
         }
     }
