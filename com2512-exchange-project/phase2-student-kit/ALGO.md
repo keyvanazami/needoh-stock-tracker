@@ -1,62 +1,67 @@
-# The Phase 2 strategy
+# The trading rule
 
 Everyone trades the same way on purpose. The point of this phase is the system
-you build around the strategy, not the strategy itself, so the rule below is
-fixed and the constants are not yours to tune.
+you build around the strategy rather than the strategy itself, so the rule below
+is fixed, and the three numbers in it are not yours to adjust.
+
+The rule keeps a moving average of the last **twenty** mid prices for each
+symbol. When the current mid falls more than **two** cents below that average,
+it buys **ten** shares; when the mid rises more than two cents above it, it
+sells ten. The rest of the time it does nothing.
+
+In full, for every `QUOTE` that arrives:
 
 ```
-WINDOW = 20      mids in the moving average
-BAND   = 2       cents away from the average before you act
-SIZE   = 10      shares per order
-```
-
-On every `QUOTE` for a symbol:
-
-```
-if bid == 0 or ask == 0:        do nothing      one-sided book
+if bid or ask is zero:          do nothing      one-sided book, not tradeable
 mid = (bid + ask) / 2                           integer division
-append mid to that symbol's window, keep the last WINDOW
-if the window is not full:      do nothing      still warming up
-sma = sum(window) / WINDOW                      integer division
-if   mid < sma - BAND:          BUY  SIZE at ask
-elif mid > sma + BAND:          SELL SIZE at bid
+append mid to that symbol's window, keeping the last 20
+if the window holds fewer than 20:  do nothing  still warming up
+sma = sum(window) / 20                          integer division
+if   mid < sma - 2:             BUY  10 at the ask
+elif mid > sma + 2:             SELL 10 at the bid
 else:                           do nothing
 ```
 
-Each symbol keeps its own window. Both divisions **floor** — use integer
-arithmetic throughout and the result is identical in any language. Floating
-point is the usual reason two implementations disagree.
+Each symbol keeps its own separate window.
 
-Orders are marketable limits: a BUY at the current ask and a SELL at the current
-bid cross the spread and fill immediately.
+Both of those divisions **floor**, so do the whole thing in integer arithmetic
+and your answers will be identical to everybody else's. This is the single most
+common place for two implementations to disagree: in floating point the moving
+average will drift a fraction of a cent away from the integer one, and every so
+often that fraction is enough to change a decision.
 
-Before you send, check you can afford it. A BUY you have no cash for and a SELL
-of stock you do not hold are both rejected, and rejects count against you.
+The orders are marketable limits, which is to say that buying at the current ask
+and selling at the current bid both cross the spread and fill straight away.
 
-## Check yourself before you trade
+Before you send anything, check you can afford it. A buy you have no cash for,
+and a sell of stock you do not hold, are both rejected, and rejections count
+against you.
+
+## Checking your implementation
 
 ```bash
 java -jar xchg-server.jar --algo-vectors
 ```
 
-That prints a fixed quote sequence and, beside it, the decision a correct
-implementation makes at each tick — the same idea as the CRC check values in
-Phase 1. Feed those quotes to your strategy and compare column by column. A
-correct implementation produces **5 BUY and 6 SELL decisions across the 34
-quotes**. A different total means you have diverged, and integer division is
-nearly always the culprit.
+This prints a fixed sequence of quotes with the decision a correct
+implementation makes beside each one, in the same spirit as the checksum test
+values in Phase 1. Feed those quotes to your strategy and compare the two
+columns. A correct implementation produces **five buy and six sell decisions
+across the thirty-four quotes**, so if your totals come out differently you have
+diverged somewhere, and integer division is where to look first.
 
-Do this first. Debugging a strategy and a network client at the same time is
-miserable, and the vectors take it off the table.
+## Why the rule makes money
 
-## Why it makes money
+The market maker's price follows a slow cycle with a little noise on top, so a
+price that has fallen well below its own recent average does genuinely tend to
+come back up.
 
-The market maker's mid follows a slow cycle with noise on top, so a price well
-below its own recent average does tend to come back. That is a deliberately
-synthetic world: it exists so that the strategy has a real edge, which in turn
-means that **missing market data costs you money**. Against a pure random walk
-the same rule would simply pay the spread forever, and the highest-scoring
-client would be the one that traded least — which would teach you nothing.
+That is a deliberately artificial world, and it is worth knowing why we built it
+that way. The strategy needs a real edge for this exercise to work, because only
+then does missing market data actually cost you something. If prices simply
+wandered at random, the same rule would pay the spread over and over and slowly
+lose money, and the best-scoring client in the room would be whichever one
+traded least — which would teach nobody anything.
 
 So the edge is there to be captured. How much of it you actually capture depends
 on your client, and that is the part being assessed.

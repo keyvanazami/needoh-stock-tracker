@@ -1,147 +1,160 @@
-# COM2512 Phase 1 — student kit
+# COM2512 Phase 1 — talking to the exchange over UDP
 
-Write a client that trades on the exchange over **UDP**. You get a test server
-and the exchange UI; you write the client, in whatever language you like.
+In this phase you write a program that talks to our exchange server over UDP.
+You can write it in whatever language you like, because we are not giving you
+any client code — what you get instead is `PROTOCOL.md`, which describes exactly
+what the bytes have to look like, and a server that will tell you when you get
+them wrong.
 
-There is no client code in this kit. [`PROTOCOL.md`](PROTOCOL.md) is the spec,
-and the server will check your bytes for you.
+When you are finished, hand in your source code and a few screenshots. There is
+no report to write.
 
-**Submit:** your client source, plus screenshots. No write-up.
+## Getting started
 
-## Run the server
-
-Needs a JRE 17+. Nothing else to install.
+You need Java 17 or newer to run the server, and nothing else at all. Start it
+like this:
 
 ```bash
 java -jar xchg-server.jar
 ```
 
-```
-  exchange   UDP  0.0.0.0:9001
-  UI         http://localhost:9000/
-```
+It will tell you that the exchange is listening on UDP port 9001 and that there
+is a web page at <http://localhost:9000/>. Open that page now, before you write
+anything. There is a market maker built into the server that is already quoting
+prices, so the exchange is alive and trading even though nobody has connected to
+it yet, and your very first order will be able to trade against it.
 
-Open the UI. A built-in market maker is already quoting, so the book is live
-before you write a line of code — your first order can trade immediately.
-
-Useful modes, all of which exit straight away:
-
-```bash
-java -jar xchg-server.jar --vectors          # the test vectors your client must reproduce
-java -jar xchg-server.jar --decode "58 43 01 40 ..."   # decode a packet, field by field
-java -jar xchg-server.jar --help             # every option
-```
-
-## The UI is your debugger
-
-<http://localhost:9000/> shows the order books, the trade tape, every connected
-session — and a **packet log**: every datagram the server received or sent, how
-it decoded, and why it was rejected if it was. Click a row for the raw bytes.
-
-When your client misbehaves, the answer is almost always on that screen already:
-`ORDER payload is 9 bytes, spec says 11` beats guessing. Filter it with
-**problems only**, and hit **Freeze** to stop the refresh while you read.
-
-The sessions table also shows gaps, duplicates and late packets in *your*
-sequence numbers, as the server sees them.
-
-## Build it in five steps
-
-Each step is visible in the UI, so you always know whether it worked.
-
-1. **CRC first.** Reproduce the four check values in `PROTOCOL.md`. Everything
-   downstream depends on this, and a wrong CRC looks like a dead server.
-2. **Reproduce the vectors.** Encode the `HELLO` and `ORDER` from
-   `--vectors` and compare byte for byte. When they match, your framing is right.
-3. **HELLO → WELCOME.** Send it, read your session id and the symbol table out
-   of the reply. You should appear in the UI's sessions table.
-4. **Trade.** `ORDER` a buy that crosses the market maker's ask, read the `ACK`,
-   and watch the print land in the tape. Then rest an order far from the market
-   and `CANCEL` it by the order id the ACK gave you.
-5. **Stay alive.** `PING` every 5 seconds. Stop, and after 15 seconds the server
-   reaps your session and cancels your orders — on purpose. UDP has no
-   connection to notice dying, so liveness is something the protocol invents.
-
-Decode the `QUOTE` and `TRADE` broadcasts as they arrive and print them; your
-client should show a running top-of-book.
-
-## Then break the link
-
-The server can pretend to be a bad network. Pick a condition by name:
+Three other things the server can do for you, each of which prints something and
+then exits:
 
 ```bash
-java -jar xchg-server.jar --link list        # every profile, with what it does
-java -jar xchg-server.jar --link lossy       # 20% of datagrams vanish
-java -jar xchg-server.jar --link slow        # 64kbps, 200ms latency
-java -jar xchg-server.jar --link busy        # a congested link: delay rises, then drops
-java -jar xchg-server.jar --link corrupt     # bit flips; your CRC check has to catch them
-java -jar xchg-server.jar --link flaky-acks  # orders get through, ACKs mostly do not
+java -jar xchg-server.jar --vectors                    # test data your client must reproduce
+java -jar xchg-server.jar --decode "58 43 01 40 ..."   # explain one packet, field by field
+java -jar xchg-server.jar --help                       # everything else it accepts
 ```
 
-The active profile and what it is doing to you appear across the top of the UI,
-and the packet log tags each datagram — `queued 24ms, serialised 10ms`,
-`bit flipped at byte 14 (payload) bit 3`, `tail-dropped: queue full`.
+## The web page is your debugger
 
-You are **not** asked to fix any of this in Phase 1 — you are asked to see it and
-measure it. Three worth doing:
+Most of your debugging will happen on that page rather than in your own code.
+Alongside the order books and the trades, it shows a complete log of every
+datagram the server has received or sent, what it made of each one, and — when
+it rejected something — why. If your client is misbehaving, the explanation is
+usually already on the screen: something like `ORDER payload is 9 bytes, spec
+says 11` will save you an hour of guessing.
 
-- **`--link flaky-acks`.** Your order reaches the book and executes, but the ACK
-  is lost or arrives corrupt. Your client cannot tell "my order never arrived"
-  from "the reply never came back", and resending blindly would double your
-  position. Sit with that; it is the problem Phase 2 exists to solve.
-- **`--link corrupt`.** A corrupted packet is not a lost one: it arrives, and it
-  is *wrong*. If your client skips the CRC check it will read garbage prices as
-  real. Verify every packet before you believe it.
-- **`--link busy`.** Watch the mean delay in the UI climb as the queue fills, and
-  then watch packets start disappearing without any loss setting. That is
-  congestion: delay first, loss second.
+There is a filter box for narrowing the log down, a **problems only** checkbox
+for hiding everything that worked, and a **Freeze** button that stops the page
+refreshing so you can actually read a line before it scrolls away. Clicking any
+row shows you the raw bytes of that packet.
 
-Anything can be tuned, and single effects can be aimed at one message type:
+The page also keeps count of anything odd it notices in the sequence numbers you
+send: gaps where a datagram seems to have gone missing, duplicates, and packets
+that arrived later than they should have.
+
+## Building your client
+
+Work through it in roughly this order, because each step is visible on the web
+page and you will know immediately whether it worked.
+
+**Start with the checksum.** `PROTOCOL.md` gives four short test values for
+CRC-16/CCITT-FALSE. Get those four matching before you open a socket. Everything
+else depends on the checksum being right, and the symptom of getting it wrong is
+that the server ignores you completely, which looks exactly like the server
+being broken or your packets not arriving.
+
+**Then reproduce the test vectors.** Run `--vectors` and you will get a list of
+complete datagrams in hex. Build the `HELLO` and the `ORDER` yourself and compare
+them byte by byte against those. Once they match, you know your framing is
+correct, and you can stop wondering about it.
+
+**Now say hello.** Send a `HELLO` and read the `WELCOME` that comes back; it
+carries the session id you must put in every later packet, along with the table
+of symbols the exchange trades. You should see yourself appear in the sessions
+list on the web page.
+
+**Then trade.** Send an `ORDER` to buy at a price that crosses the market
+maker's offer, read the `ACK`, and watch the trade appear in the tape on the web
+page. After that, try resting an order well away from the current price and then
+cancelling it, using the order id the exchange gave you in the `ACK`.
+
+**Finally, stay alive.** Send a `PING` every five seconds. If you stop, the
+server will throw your session away after fifteen seconds and cancel any orders
+you had resting. This is deliberate: UDP has no connection that can be noticed
+dying, so the only way the exchange can tell whether you are still there is if
+you keep saying so.
+
+While all this is going on your client should also be reading the `QUOTE` and
+`TRADE` messages that arrive unprompted, and printing them, so that you end up
+with a running view of the market.
+
+## Making the network worse
+
+Once your client works, make its life difficult:
 
 ```bash
-java -jar xchg-server.jar --link slow --bandwidth 32k
-java -jar xchg-server.jar --impair out:ACK:corrupt=0.5    # only the ACKs
-java -jar xchg-server.jar --impair out:QUOTE:drop=1.0     # no market data at all
-java -jar xchg-server.jar --loss 0.2 --jitter 100 --reorder 0.1
+java -jar xchg-server.jar --link lossy
 ```
 
-Everything is seeded, so `--seed 7` twice gives the same run twice.
+A fifth of all datagrams now vanish in each direction. The server can pretend to
+be several different kinds of bad connection, and `--link list` will describe
+them all — among them `slow`, `busy`, `corrupt` and `flaky-acks`. Whichever you
+choose is named across the top of the web page along with what it is doing to
+you, and each line of the packet log is tagged with what happened to it.
 
-## Submit
+You are not being asked to fix any of this in Phase 1. You are being asked to
+see it happen, and to measure it. Count the gaps in the sequence numbers on the
+packets the server sends you, count the duplicates, and make sure that a missing
+reply leaves your client waiting sensibly rather than hanging forever. Repairing
+the damage is Phase 2, and you will build it on exactly this protocol.
 
-```
-<your-id>-phase1/
-  <your client source>
-  README.md          one paragraph: language, how to run it
-  screenshots/
-```
+Everything the server does randomly is seeded, so `--seed 7` twice will give you
+the same run twice.
 
-Screenshots, annotated:
+## What to hand in
 
-1. The UI's **sessions table** with your team connected.
-2. The **packet log** showing your HELLO, your ORDER and its ACK.
-3. The **trade tape** with a trade your client caused.
-4. Your client's own output, decoding QUOTE and TRADE.
-5. The same client against `--loss 0.2`, with gaps or duplicates visible.
+Put your source code in a folder named after your student id, with a short
+`README.md` saying what language you wrote it in and how to run it, and a
+`screenshots` folder containing five pictures:
 
-A Wireshark capture on the loopback interface (`udp.port == 9001`) is worth
-taking too: `java -jar xchg-server.jar --decode` and Wireshark's hex pane should
-agree about every byte.
+the sessions table on the web page with your team connected; the packet log
+showing your `HELLO`, your `ORDER` and the `ACK` that came back; the trade tape
+containing a trade your client caused; your own client's output as it decodes
+quotes and trades; and finally the same client running against `--link lossy`,
+with the gaps or duplicates visible.
 
-## When it does not work
+It is also worth capturing the traffic in Wireshark on the loopback interface
+with the filter `udp.port == 9001`, and checking that what Wireshark shows you
+agrees with what `--decode` says about the same packet.
 
-| symptom | cause |
-|---|---|
-| no reply at all | CRC wrong. Check the four values in `PROTOCOL.md` before anything else |
-| `E_MAGIC` | wrong byte order — `0x5843` is big-endian, high byte first |
-| `E_LENGTH` | `PAYLEN` disagrees with the bytes you actually sent |
-| `E_CRC` | CRC computed over the wrong range: it covers the header *and* payload, not itself |
-| `E_PAYLOAD` | payload is not exactly the size the message type requires |
-| `E_NOHELLO` | send `HELLO` first; the server keys sessions by address and port |
-| `E_SESSION` | you are still sending `SESSION = 0` after WELCOME gave you an id |
-| `E_RATE` | over 200 packets/sec — put a sleep in your loop |
-| session keeps vanishing | no `PING`; the TTL is 15 seconds |
-| orders rejected, reason 1 | symbol id, not ticker text — take the table from `WELCOME` |
-| works alone, fails in the lab | two clients on one machine must bind different source ports |
+## If it will not work
 
-`--decode "<hex>"` settles most arguments in one command.
+By far the most common problem is that **the server appears to ignore you
+entirely**. That is almost always a wrong checksum, so go back and check those
+four test values before you look at anything else. The server will not reply to
+a packet whose CRC does not match, because it has no reason to believe anything
+the packet says.
+
+If you are getting errors back, each one tells you what it objected to.
+`E_MAGIC` means your byte order is wrong somewhere — the first two bytes are
+`0x5843` with the high byte first. `E_LENGTH` means the length you declared in
+the header does not match the number of bytes you actually sent. `E_CRC` usually
+means you computed the checksum over the wrong range: it covers the header and
+the payload, but not itself. `E_PAYLOAD` means the payload is not exactly the
+size that kind of message requires. `E_NOHELLO` means you have not introduced
+yourself yet, and `E_SESSION` means you are still sending a session id of zero
+after the `WELCOME` gave you a real one.
+
+Two more that surprise people. `E_RATE` means you are sending more than two
+hundred packets a second and the server has started refusing them, which usually
+means a retry loop with no delay in it. And if your session keeps disappearing
+after about fifteen seconds, you have stopped sending `PING`.
+
+If your orders come back rejected with reason 1, you are probably sending the
+ticker text where the exchange expects the numeric symbol id; take the id from
+the `WELCOME` message rather than guessing. And if everything works alone but
+falls apart in the lab, remember that two clients on one machine need different
+source ports.
+
+When you cannot work out what is wrong with a particular packet, paste it into
+`--decode` and the server will take it apart for you, including telling you
+which checksum it was expecting.
