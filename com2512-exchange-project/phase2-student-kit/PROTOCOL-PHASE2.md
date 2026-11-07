@@ -4,6 +4,9 @@ Everything in `PROTOCOL.md` still holds. The envelope is the same, the checksum
 is the same, and the order in which a receiver validates a packet is the same.
 This document only describes what is new.
 
+It uses a handful of trading terms — resting orders, fills, positions, short
+selling — which are all explained in `TRADING.md` if they are new to you.
+
 ## You have an account now
 
 When your session connects, the exchange gives you some money and some stock to

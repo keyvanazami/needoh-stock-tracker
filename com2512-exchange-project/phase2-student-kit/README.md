@@ -9,6 +9,12 @@ Everybody trades using exactly the same rule, which is written out in
 will differ between you is how well your client is built, and that is what the
 leaderboard ends up measuring.
 
+**If you have never looked at a financial market before, start with
+`TRADING.md`.** It is a short read and it explains every term the rest of the
+kit uses — what an order book is, what the bid and the ask are, why the gap
+between them costs you money, and what it means to hold a position. None of it
+is difficult, but the rest of this will be heavy going without it.
+
 Hand in your source code and some screenshots. There is no report.
 
 ## What has changed since Phase 1
@@ -24,8 +30,13 @@ so the encoder you wrote in Phase 1 still works exactly as it did.
 
 ## Start with the strategy, on its own
 
-Before you connect to anything, implement the trading rule from `ALGO.md` and
-check it against the test data:
+The rule is a mean reversion strategy: it watches each symbol's price against
+its own recent average, buys when the price looks unusually cheap, and sells
+when it looks unusually dear. `ALGO.md` explains the thinking behind it, walks
+through a worked example, and then states it precisely.
+
+Before you connect to anything, implement it and check it against the test
+data:
 
 ```bash
 java -jar xchg-server.jar --algo-vectors
